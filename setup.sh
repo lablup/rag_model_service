@@ -28,3 +28,5 @@ python auto_rag_service/generate_model_definition.py --github-url "$1"
 
 # Print success message
 echo "Setup completed successfully!"
+
+pip install backend.ai-client
