@@ -6,5 +6,10 @@ pip install -e .
 
 source /models/RAGModelService/.env
 
-pip install backend.ai-client
+echo "" >> ~/.bashrc
+echo "# Environment variables from RAGModelService" >> ~/.bashrc
+cat /models/RAGModelService/.env >> ~/.bashrc
+echo "# End of RAGModelService environment variables" >> ~/.bashrc
+source ~/.bashrc
+
 

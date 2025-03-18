@@ -13,6 +13,12 @@ else
     echo "Warning: .env file not found. Make sure OPENAI_API_KEY is set."
 fi
 
+echo "" >> ~/.bashrc
+echo "# Environment variables from RAGModelService" >> ~/.bashrc
+cat /models/RAGModelService/.env >> ~/.bashrc
+echo "# End of RAGModelService environment variables" >> ~/.bashrc
+source ~/.bashrc
+
 
 pip install -e .
 
