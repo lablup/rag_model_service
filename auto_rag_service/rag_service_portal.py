@@ -114,60 +114,54 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[st
         Path to the generated model definition file, or None if generation failed
     """
     try:
-        # Run generate_model_definition.py to create the model definition YAML
-        cmd = [
-            sys.executable,
-            "auto_rag_service/generate_model_definition.py",
-            "--github-url", github_url,
-            "--output-dir", str(service_dir),
-            "--service-type", "gradio"
-        ]
-        
-        # Run the command and capture output
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
-        
-        # Extract the path from the output
-        output_lines = result.stdout.strip().split('\n')
-        for line in output_lines:
-            if line.startswith("Model definition written to "):
-                model_def_path = line.replace("Model definition written to ", "").strip()
-                return model_def_path
-        
-        # If we couldn't find the path in the output, try to guess it
         # Parse GitHub URL to extract components for the filename
         pattern = r"https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
         match = re.match(pattern, github_url)
-        if match:
-            owner, repo = match.group(1), match.group(2)
-            path = match.group(4)  # This will be None if path is not specified
-            
-            # Generate docs name for the filename
-            base_name = f"{owner}-{repo}".lower()
-            if path:
-                # Replace slashes with hyphens and remove any special characters
-                path_part = re.sub(r'[^a-zA-Z0-9-]', '', path.replace('/', '-'))
-                docs_name = f"{base_name}-{path_part}"
-            else:
-                docs_name = base_name
-                
-            return str(service_dir / f"model-definition-{docs_name}.yaml")
+        if not match:
+            logger.error(f"Could not parse GitHub URL: {github_url}")
+            return None
         
-        return None
+        owner, repo = match.group(1), match.group(2)
+        path = match.group(4)  # This will be None if path is not specified
+        
+        # Generate docs name for the filename
+        base_name = f"{owner}-{repo}".lower()
+        if path:
+            # Replace slashes with hyphens and remove any special characters
+            path_part = re.sub(r'[^a-zA-Z0-9-]', '', path.replace('/', '-'))
+            docs_name = f"{base_name}-{path_part}"
+        else:
+            docs_name = base_name
+        
+        # Create the file path
+        model_def_path = service_dir / f"model-definition-{docs_name}.yaml"
+        
+        # Create the model definition content
+        model_def_content = f"""models:
+  - name: "RAG Service - {repo}"
+    model_path: "/models/RAGModelService"
+    service:
+      pre_start_actions:
+        - action: run_command
+          args:
+            command: ["/bin/bash", "/models/RAGModelService/auto_rag_service/setup.sh"]
+      start_command: ["python3", "/models/RAGModelService/auto_rag_service/start.sh"]
+      port: 8000
+"""
+        # Write the model definition to file
+        with open(model_def_path, "w") as f:
+            f.write(model_def_content)
+        
+        logger.info(f"Model definition written to {model_def_path}")
+        return str(model_def_path)
         
     except Exception as e:
         logger.error(f"Error generating model definition: {e}")
         return None
 
-
 def process_github_url(github_url: str, progress_callback: Optional[callable] = None) -> Dict:
     """
-    Process a GitHub URL to create a RAG service.
+    Process a GitHub URL to create a RAG service using Backend.AI.
     
     Args:
         github_url: GitHub URL for documentation
@@ -177,9 +171,9 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
         Service information dictionary
     """
     try:
-        # Generate service ID and find available port
+        # Generate service ID and create unique service name
         service_id = get_unique_service_id()
-        port = find_available_port()
+        service_name = f"rag_service_{service_id}"
         
         # Create service directory
         service_dir = create_service_directory(service_id)
@@ -190,8 +184,7 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
         service_info = {
             "id": service_id,
             "github_url": github_url,
-            "port": port,
-            "url": f"http://localhost:{port}",
+            "service_name": service_name,
             "status": ServiceStatus.PENDING,
             "message": "Initializing service...",
             "service_dir": service_dir,
@@ -202,13 +195,12 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
         # Add to services dictionary
         SERVICES[service_id] = service_info
         
-        # Update progress if callback provided
-        if progress_callback:
-            progress_callback(0.1, "Cloning repository...")
-        
         # Update status
         service_info["status"] = ServiceStatus.PROCESSING
-        service_info["message"] = "Cloning repository..."
+        service_info["message"] = "Processing GitHub repository..."
+        
+        if progress_callback:
+            progress_callback(0.2, "Cloning repository...")
         
         # Run setup_rag.py to clone repository and create vector indices
         setup_cmd = [
@@ -245,7 +237,7 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
         
         # Update status
         service_info["status"] = ServiceStatus.READY
-        service_info["message"] = "Service is ready! Launching Gradio interface..."
+        service_info["message"] = "Service is ready! Launching Backend.AI model service..."
         
         # Save service info to file for persistence
         with open(service_dir / "service_info.txt", "w") as f:
@@ -283,7 +275,7 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
 
 def start_service(service_id: str) -> None:
     """
-    Start a RAG service in a background process.
+    Start a RAG service as a Backend.AI model service.
     
     Args:
         service_id: Service ID
@@ -293,47 +285,82 @@ def start_service(service_id: str) -> None:
         return
     
     service = SERVICES[service_id]
-    
+    github_url = service["github_url"]
     try:
-        # Create command to run the service
-        cmd = [
-            sys.executable,
-            "auto_rag_service/launch_gradio.py",
-            "--docs-path", str(service["docs_dir"]),
-            "--indices-path", str(service["indices_dir"]),
-            "--port", str(service["port"]),
-            "--host", "0.0.0.0",  # Allow access from other machines
-        ]
+        # Extract repository organization and name from GitHub URL
+        match = re.match(r'https?://github\.com/([^/]+)/([^/]+)', github_url)
+        if match:
+            repo_org = match.group(1)
+            repo_name = match.group(2)
+            if "." in repo_name:
+                repo_name = repo_name.split(".")[0]
+                
+            service_name = f"rag_{repo_name}"
+        else:
+            # Fallback if URL doesn't match expected pattern
+            repo_name = github_url.split("/")[-1]
+            if "." in repo_name:
+                repo_name = repo_name.split(".")[0]
+            service_name = f"rag_service"
         
-        # Start the process
-        process = subprocess.Popen(
-            cmd,
+        # Get model definition path
+        model_def_path = service.get("model_definition_path")
+        if not model_def_path:
+            raise ValueError("Model definition path not found in service info")
+        
+        # Extract repository name for environment variable
+        repo_name = github_url.split("/")[-1]
+        if "." in repo_name:
+            repo_name = repo_name.split(".")[0]
+        
+        # Create Backend.AI model service with environment variables
+        create_service_cmd = [
+            "backend.ai", "service", "create",
+            "cr.backend.ai/cloud/ngc-pytorch:23.09-pytorch2.1-py310-cuda12.2",
+            "auto_rag",
+            "1",
+            "--name", service_name,
+            "--tag", "rag_model_service",
+            "--scaling-group", "nvidia-H100",
+            "--model-definition-path", f"/models/RAGModelService/{model_def_path}",
+            "--public",
+            "-e", f"RAG_SERVICE_NAME={service_name}",
+            "-e", f"RAG_SERVICE_PATH={service['service_dir']}",
+            "-r", "cuda.shares=0",
+            "-r", "mem=32g",
+            "-r", "cpu=4"
+        ]
+        breakpoint()
+        # Run the command
+        create_result = subprocess.run(
+            create_service_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True
         )
         
-        # Store process in service info
-        service["process"] = process
+        # Extract service endpoint and update service info
+        for line in create_result.stdout.split('\n'):
+            if "Service endpoint" in line:
+                service_url = line.split("Service endpoint:")[1].strip()
+                service["url"] = service_url
+                break
         
-        # Save the PID for potential later use
-        service["pid"] = process.pid
+        # If we couldn't extract the URL, build a default one
+        if "url" not in service:
+            # This is a placeholder - actual URL format may vary
+            service["url"] = f"https://service.backend.ai/services/{service_name}"
         
-        # Wait for service to be ready (checking if port is open)
-        for _ in range(30):  # Wait up to 30 seconds
-            import socket
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(('localhost', service["port"])) == 0:
-                    break
-            time.sleep(1)
+        logger.info(f"Service {service_id} started with URL {service['url']}")
         
-        logger.info(f"Service {service_id} started on port {service['port']}")
+        # Update status
+        service["status"] = ServiceStatus.READY
+        service["message"] = f"Service is ready at {service['url']}"
         
     except Exception as e:
         logger.error(f"Error starting service {service_id}: {e}")
         service["status"] = ServiceStatus.ERROR
         service["message"] = f"Error starting service: {str(e)}"
-
 
 def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
     """
@@ -408,16 +435,19 @@ def create_interface() -> gr.Blocks:
                 )
         
         with gr.Row():
-            examples = gr.Examples(
-                examples=[
-                    "https://github.com/pytorch/pytorch",
-                    "https://github.com/microsoft/TypeScript",
-                    "https://github.com/pandas-dev/pandas",
-                    "https://github.com/fastai/fastai",
-                ],
-                inputs=github_url,
-                label="Example Repositories",
-            )
+            gr.Markdown("### Example Repositories:")
+        
+        with gr.Row():
+            pytorch_btn = gr.Button("PyTorch")
+            typescript_btn = gr.Button("TypeScript")
+            pandas_btn = gr.Button("Pandas")
+            fastai_btn = gr.Button("FastAI")
+        
+        # Set up click handlers for example buttons
+        pytorch_btn.click(fn=lambda: "https://github.com/pytorch/pytorch", outputs=github_url)
+        typescript_btn.click(fn=lambda: "https://github.com/microsoft/TypeScript", outputs=github_url)
+        pandas_btn.click(fn=lambda: "https://github.com/pandas-dev/pandas", outputs=github_url)
+        fastai_btn.click(fn=lambda: "https://github.com/fastai/fastai", outputs=github_url)
         
         # Handle form submission
         create_button.click(
@@ -471,6 +501,7 @@ def main():
     
     # Create and launch the interface
     interface = create_interface()
+    interface.queue()  # Enable queuing
     interface.launch(server_name="0.0.0.0", server_port=8000)
     
     return 0
