@@ -6,5 +6,7 @@ models:
         - action: run_command
           args:
             command: ["/bin/bash", "/models/RAGModelService/setup_portal.sh"]
-      start_command: ["python3", "/models/RAGModelService/auto_rag_service/rag_service_portal.py"]
+      start_command:
+        - python3
+        - /models/RAGModelService/auto_rag_service/rag_service_portal.py
       port: 8000
