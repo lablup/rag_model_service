@@ -145,7 +145,7 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[st
         - action: run_command
           args:
             command: ["/bin/bash", "/models/RAGModelService/auto_rag_service/setup.sh"]
-      start_command: ["python3", "/models/RAGModelService/auto_rag_service/start.sh"]
+      start_command: ["/bin/bash", "/models/RAGModelService/auto_rag_service/start.sh"]
       port: 8000
 """
         # Write the model definition to file
@@ -316,7 +316,7 @@ def start_service(service_id: str) -> None:
         # Create Backend.AI model service with environment variables
         create_service_cmd = [
             "backend.ai", "service", "create",
-            "cr.backend.ai/cloud/ngc-pytorch:23.09-pytorch2.1-py310-cuda12.2",
+            "cr.backend.ai/testing/ngc-pytorch:24.12-pytorch2.6-py312-cuda12.6",
             "auto_rag",
             "1",
             "--name", service_name,
