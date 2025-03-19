@@ -14,7 +14,6 @@ setup(
     python_requires=">=3.9",
     install_requires=requirements + [
         "python-dotenv",
-        "gradio",
     ],
     entry_points={
         "console_scripts": [

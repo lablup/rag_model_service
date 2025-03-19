@@ -1,3 +1,9 @@
+pydantic 
+sse_starlette
+gradio
+fastapi
+uvicorn
+GitPython
 langchain
 langchain-openai
 langchain-community
@@ -7,10 +13,3 @@ faiss-cpu
 structlog
 typer 
 rich 
-pydantic 
-sse_starlette
-gradio
-fastapi
-uvicorn
-GitPython
-backend.ai-client
