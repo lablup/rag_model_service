@@ -27,7 +27,7 @@ console = Console()
 # Load configuration
 config = load_config()
 
-DOC_NAME = os.getenv("OPENAI_MODEL", "gpt-4o")
+DOC_NAME = os.getenv("RAG_SERVICE_NAME", "gpt-4o")
 
 class ChatMessage(BaseModel):
     """Single chat message model"""
