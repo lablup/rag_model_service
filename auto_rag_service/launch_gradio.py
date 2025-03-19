@@ -333,7 +333,7 @@ async def main() -> int:
             return 1
         
         # Create Gradio interface
-        interface = create_gradio_interface(rag_manager)
+        interface = create_gradio_interface(rag_manager, docs_path=config['paths']['docs_path'])
         
         # Apply customization
         interface = customize_gradio_interface(interface, config)

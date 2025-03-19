@@ -167,8 +167,136 @@ async def read_markdown_file(file_path: str | Path) -> str:
 
 def create_gradio_interface(
     rag_manager: RAGManager,
+    docs_path: Optional[Path] = None,
 ) -> gr.Blocks:
-    """Create Gradio interface for the RAG chat application"""
+    """Create Gradio interface for the RAG chat application
+    
+    Args:
+        rag_manager: RAG manager instance
+        docs_path: Optional custom path to documentation files. If None, uses default from config.
+    """
+    
+    # Use custom docs_path if provided, otherwise use default from config
+    actual_docs_path = docs_path if docs_path is not None else config.paths.docs_root
+    logger.info(f"Using documentation path: {actual_docs_path}")
+    
+    # Create a custom read_markdown_file function that uses the actual_docs_path
+    async def custom_read_markdown_file(file_path: str | Path) -> str:
+        """Read markdown file with custom docs path"""
+        try:
+            file_path = Path(file_path)
+            logger.info(f"Attempting to read file: {file_path}")
+            logger.info(f"File exists: {file_path.exists()}")
+            logger.info(f"File is file: {file_path.is_file()}")
+            logger.info(f"File absolute path: {file_path.absolute()}")
+
+            if not file_path.exists():
+                error_msg = f"File not found: {file_path}"
+                logger.error(error_msg)
+                return f"Error: {error_msg}"
+
+            logger.info(f"File exists, reading content...")
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+
+            # Fix image paths
+            # Replace relative image paths with base64 encoded images
+            file_dir = file_path.parent
+            import base64
+            import mimetypes
+            import re
+
+            def replace_image_path(match):
+                img_tag = match.group(0)
+                if 'src="' in img_tag:
+                    # Handle HTML img tags
+                    src_pattern = r'src="([^"]+)"'
+                    src_match = re.search(src_pattern, img_tag)
+                    if src_match:
+                        img_path = src_match.group(1)
+                        if not img_path.startswith(("http://", "https://", "data:")):
+                            # Convert the path to be relative to assets/images
+                            rel_path = Path(img_path).name
+                            # Use the actual_docs_path instead of config.paths.docs_root
+                            try:
+                                doc_rel_path = file_path.relative_to(actual_docs_path)
+                                img_file = (
+                                    project_root
+                                    / "rag_service"
+                                    / "docs"
+                                    / "assets"
+                                    / "images"
+                                    / doc_rel_path.parent
+                                    / rel_path
+                                )
+                                if img_file.exists():
+                                    mime_type = mimetypes.guess_type(img_file)[0]
+                                    with open(img_file, "rb") as f:
+                                        img_data = base64.b64encode(f.read()).decode()
+                                    return img_tag.replace(
+                                        f'src="{img_path}"',
+                                        f'src="data:{mime_type};base64,{img_data}"',
+                                    )
+                            except ValueError:
+                                # If the file is not in the docs_root, try a direct approach
+                                logger.warning(f"File {file_path} is not in the actual_docs_path, trying direct path")
+                                img_file = file_path.parent / img_path
+                                if img_file.exists():
+                                    mime_type = mimetypes.guess_type(img_file)[0]
+                                    with open(img_file, "rb") as f:
+                                        img_data = base64.b64encode(f.read()).decode()
+                                    return img_tag.replace(
+                                        f'src="{img_path}"',
+                                        f'src="data:{mime_type};base64,{img_data}"',
+                                    )
+                elif "![" in img_tag:
+                    # Handle Markdown image syntax
+                    md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+                    md_match = re.match(md_pattern, img_tag)
+                    if md_match:
+                        alt_text = md_match.group(1)
+                        img_path = md_match.group(2)
+                        if not img_path.startswith(("http://", "https://", "data:")):
+                            # Convert the path to be relative to assets/images
+                            rel_path = Path(img_path).name
+                            try:
+                                doc_rel_path = file_path.relative_to(actual_docs_path)
+                                img_file = (
+                                    project_root
+                                    / "rag_service"
+                                    / "docs"
+                                    / "assets"
+                                    / "images"
+                                    / doc_rel_path.parent
+                                    / rel_path
+                                )
+                                if img_file.exists():
+                                    mime_type = mimetypes.guess_type(img_file)[0]
+                                    with open(img_file, "rb") as f:
+                                        img_data = base64.b64encode(f.read()).decode()
+                                    return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+                            except ValueError:
+                                # If the file is not in the docs_root, try a direct approach
+                                logger.warning(f"File {file_path} is not in the actual_docs_path, trying direct path")
+                                img_file = file_path.parent / img_path
+                                if img_file.exists():
+                                    mime_type = mimetypes.guess_type(img_file)[0]
+                                    with open(img_file, "rb") as f:
+                                        img_data = base64.b64encode(f.read()).decode()
+                                    return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+                return img_tag
+
+            # Match both HTML img tags and Markdown image syntax
+            image_pattern = r"<img[^>]+>|!\[[^\]]*\]\([^)]+\)"
+            content = re.sub(image_pattern, replace_image_path, content)
+
+            logger.info(f"Successfully read {len(content)} characters")
+            logger.info(f"Content preview: {content[:200]}")
+            return content
+        except Exception as e:
+            error_msg = f"Error reading markdown file: {e}"
+            logger.error(error_msg, exc_info=True)
+            return f"Error: {error_msg}"
 
     async def process_message(
         message: str,
@@ -223,7 +351,7 @@ def create_gradio_interface(
                 
                 relative_path = metadata["relative_path"]
                 doc_name = f"{relative_path} (score: {score:.2f})"
-                full_path = config.paths.docs_root / relative_path
+                full_path = actual_docs_path / relative_path
 
                 # Verify file exists before adding
                 if not full_path.exists():
@@ -262,7 +390,7 @@ def create_gradio_interface(
                 (
                     ""
                     if not state.current_docs
-                    else await read_markdown_file(
+                    else await custom_read_markdown_file(
                         state.current_docs[list(state.current_docs.keys())[0]]
                     )
                 ),
@@ -415,7 +543,7 @@ def create_gradio_interface(
                 if selected_doc_name in state.current_docs:
                     file_path = state.current_docs[selected_doc_name]
                     logger.info(f"Found file path: {file_path}")
-                    content = await read_markdown_file(file_path)
+                    content = await custom_read_markdown_file(file_path)
                     state.selected_doc = selected_doc_name
                     return content, state
 
@@ -437,12 +565,20 @@ def create_gradio_interface(
     return interface
 
 
-async def main():
-    """Main entry point"""
+async def main(docs_path: Optional[Path] = None):
+    """Main entry point
+    
+    Args:
+        docs_path: Optional custom path to documentation files. If None, uses default from config.
+    """
     try:
+        # Use custom docs_path if provided, otherwise use default from config
+        actual_docs_path = docs_path if docs_path is not None else config.paths.docs_root
+        logger.info(f"Using documentation path: {actual_docs_path}")
+        
         # Initialize vector store
         vector_store = VectorDBManager(
-            docs_root=config.paths.docs_root, indices_path=config.paths.indices_path
+            docs_root=actual_docs_path, indices_path=config.paths.indices_path
         )
 
         # Load vector indices
@@ -460,14 +596,13 @@ async def main():
         rag_manager = RAGManager(llm_config, vector_store)
 
         # Create and launch Gradio interface
-        interface = create_gradio_interface(rag_manager)
+        interface = create_gradio_interface(rag_manager, docs_path=actual_docs_path)
         interface.launch(
             server_name=config.server.host,
             server_port=config.server.port,
             share=config.server.share_enabled,
             debug=True,
         )
-
     except Exception as e:
         logger.error(f"Error initializing application: {e}", exc_info=True)
         console.print(f"[red]Error initializing application: {str(e)}[/red]")
