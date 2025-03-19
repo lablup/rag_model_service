@@ -322,7 +322,7 @@ def start_service(service_id: str) -> None:
             "--name", service_name,
             "--tag", "rag_model_service",
             "--scaling-group", "nvidia-H100",
-            "--model-definition-path", f"/models/RAGModelService/{model_def_path}",
+            "--model-definition-path", f"RAGModelService/{model_def_path}",
             "--public",
             "-e", f"RAG_SERVICE_NAME={service_name}",
             "-e", f"RAG_SERVICE_PATH={service['service_dir']}",
@@ -330,7 +330,6 @@ def start_service(service_id: str) -> None:
             "-r", "mem=4g",
             "-r", "cpu=2"
         ]
-
         # Run the command
         create_result = subprocess.run(
             create_service_cmd,
@@ -502,7 +501,7 @@ def main():
     # Create and launch the interface
     interface = create_interface()
     interface.queue()  # Enable queuing
-    interface.launch(server_name="0.0.0.0", server_port=8000)
+    interface.launch(server_name="0.0.0.0", server_port=8000, share=True)
     
     return 0
 
