@@ -327,10 +327,10 @@ def start_service(service_id: str) -> None:
             "-e", f"RAG_SERVICE_NAME={service_name}",
             "-e", f"RAG_SERVICE_PATH={service['service_dir']}",
             "-r", "cuda.shares=0",
-            "-r", "mem=32g",
-            "-r", "cpu=4"
+            "-r", "mem=4g",
+            "-r", "cpu=2"
         ]
-        breakpoint()
+
         # Run the command
         create_result = subprocess.run(
             create_service_cmd,
