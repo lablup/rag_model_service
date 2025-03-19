@@ -16,7 +16,7 @@ fi
 # Launch the RAG service using create_rag_service.py
 cd /models/RAGModelService
 python /models/RAGModelService/auto_rag_service/launch_gradio.py \
-    --docs-path $BACKEND_MODEL_PATH/${RAG_SERVICE_PATH}/"docs" \
+    --docs-path $BACKEND_MODEL_PATH/${RAG_SERVICE_PATH}/"docs/docs" \
     --indices-path $BACKEND_MODEL_PATH/${RAG_SERVICE_PATH}/"indices" \
     --host "0.0.0.0" \
     --port 8000
