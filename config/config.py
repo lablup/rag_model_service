@@ -17,6 +17,48 @@ load_dotenv()
 # Constants
 DOCS_PATH = Path(os.environ.get("DOCS_PATH", str(Path(__file__).resolve().parent.parent.parent / "rag_service" / "docs" / "docs")))
 
+def setup_environment() -> bool:
+    """
+    Load .env file and validate required environment variables.
+    
+    Returns:
+        bool: True if the environment is properly set up, False otherwise
+    """
+    try:
+        # Load environment variables from .env file
+        load_dotenv()
+        
+        # Check for OpenAI API key
+        openai_api_key = os.environ.get("OPENAI_API_KEY")
+        if not openai_api_key:
+            logger.error("OPENAI_API_KEY environment variable is not set")
+            print("Error: OpenAI API key is required. Please set it in a .env file or as an environment variable.")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        logger.error("Error setting up environment", error=str(e))
+        print(f"Error setting up environment: {str(e)}")
+        return False
+
+
+
+class LLMConfig(BaseModel):
+    """Configuration for LLM"""
+
+    openai_api_key: str
+    model_name: str = "gpt-4o"
+    max_tokens: int = 2048
+    temperature: float = 0.2
+    streaming: bool = True
+    memory_k: int = 25
+    max_results: int = 5  # Reduced from 20 to limit context size
+    max_tokens_per_doc: int = 8000  # New: limit tokens per document
+    filter_model: str = "gpt-4o"  # Model for document filtering
+    base_url: str = ""  # Base URL for custom model endpoints
+
+
 
 class OpenAIConfig(BaseModel):
     """OpenAI API configuration."""
