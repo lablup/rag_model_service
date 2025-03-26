@@ -7,6 +7,6 @@ models:
           args:
             command: ["/bin/bash", "/models/RAGModelService/setup_portal.sh"]
       start_command:
-        - python3
-        - /models/RAGModelService/auto_rag_service/rag_service_portal.py
+        - /bin/bash
+        - /models/RAGModelService/start_portal.sh
       port: 8000
