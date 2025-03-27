@@ -95,14 +95,46 @@ class VectorStore:
         index_path = self.indices_path / self.index_name
         self.logger.info(f"Attempting to load index from: {index_path}")
         
+        # Try the primary path first
         if not index_path.exists():
             self.logger.warning(f"Index directory not found at: {index_path}")
+            
             # Check if parent directories exist
             self.logger.info(f"Parent directory exists: {self.indices_path.exists()}")
+            
             # List contents of parent directory if it exists
             if self.indices_path.exists():
                 self.logger.info(f"Contents of {self.indices_path}: {list(self.indices_path.iterdir())}")
-            return
+            
+            # Try alternative paths
+            alternative_paths = []
+            
+            # Try with RAGModelService in the path
+            if "RAGModelService" not in str(index_path):
+                path_parts = str(index_path).split("/")
+                for i in range(len(path_parts)):
+                    if path_parts[i] == "rag_services" and i > 0:
+                        # Insert RAGModelService before rag_services
+                        alt_path = "/".join(path_parts[:i]) + "/RAGModelService/" + "/".join(path_parts[i:])
+                        alternative_paths.append(Path(alt_path))
+            
+            # Try without RAGModelService in the path
+            if "RAGModelService" in str(index_path):
+                alt_path = str(index_path).replace("/RAGModelService", "")
+                alternative_paths.append(Path(alt_path))
+            
+            # Check alternative paths
+            for alt_path in alternative_paths:
+                self.logger.info(f"Trying alternative path: {alt_path}")
+                if alt_path.exists():
+                    self.logger.info(f"Found index at alternative path: {alt_path}")
+                    index_path = alt_path
+                    break
+            
+            # If still not found, return
+            if not index_path.exists():
+                self.logger.warning(f"Index not found at any path. Tried: {index_path} and {alternative_paths}")
+                return
 
         try:
             self.logger.info(f"Loading index from: {index_path}")

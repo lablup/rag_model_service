@@ -874,6 +874,11 @@ async def main(docs_path: Optional[Path] = None, indices_path: Optional[Path] = 
         vector_store = VectorStore(
             docs_root=actual_docs_path, indices_path=actual_indices_path
         )
+        
+        # Log the absolute paths for debugging
+        logger.info(f"Vector store initialized with:")
+        logger.info(f"  - docs_root absolute path: {actual_docs_path.absolute()}")
+        logger.info(f"  - indices_path absolute path: {actual_indices_path.absolute()}")
 
         # Load vector indices
         await vector_store.load_index()

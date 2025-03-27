@@ -242,7 +242,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
                         {
                             'action': 'run_command',
                             'args': {
-                                'command': ['/bin/bash', '/models/RAGModelService/deployment/scripts/setup.sh']
+                                'command': ['/bin/bash', '/models/RAGModelService/deployment/scripts/setup_gradio.sh']
                             }
                         }
                     ],
