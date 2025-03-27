@@ -323,7 +323,10 @@ async def start_service(service_id: str) -> Dict[str, Any]:
             logger.error(error_msg)
             return {
                 "status": ServiceStatus.ERROR,
-                "error": error_msg
+                "error": error_msg,
+                "url": "",
+                "model_def_path": "",
+                "id": service_id
             }
             
         service_info = SERVICES[service_id]
@@ -338,7 +341,10 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                         current_status=service_info["status"])
             return {
                 "status": service_info["status"],
-                "error": error_msg
+                "error": error_msg,
+                "url": "",
+                "model_def_path": "",
+                "id": service_id
             }
             
         # Find available port
@@ -428,8 +434,15 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 break
             await asyncio.sleep(0.5)
             
+        # Explicitly set status to PROCESSING if it's not already set
+        if service_info["status"] != ServiceStatus.PROCESSING and service_info["status"] != ServiceStatus.ERROR:
+            service_info["status"] = ServiceStatus.PROCESSING
+            logger.info("Explicitly setting service status to PROCESSING", 
+                       service_id=service_id,
+                       previous_status=service_info.get("status", "None"),
+                       new_status=ServiceStatus.PROCESSING)
+            
         logger.info("Returning service info from start_service", 
-                   service_id=service_id, 
                    service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         return service_info
         
@@ -441,6 +454,8 @@ async def start_service(service_id: str) -> Dict[str, Any]:
         error_info = {
             "status": ServiceStatus.ERROR,
             "error": str(e),
+            "url": "",
+            "model_def_path": "",
             "id": service_id
         }
         logger.error("Returning error info from start_service", error_info=error_info)
@@ -507,7 +522,12 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         
         # Process GitHub URL
         service_info = await process_github_url(github_url, update_progress)
-        logger.info("Service info after processing GitHub URL", service_info=service_info)
+        logger.info("Service info after processing GitHub URL", 
+                   service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()},
+                   service_status=service_info.get("status"),
+                   service_status_type=type(service_info.get("status")).__name__ if service_info.get("status") else None,
+                   expected_status=ServiceStatus.READY,
+                   status_comparison=service_info.get("status") == ServiceStatus.READY)
         
         if service_info.get("status") == ServiceStatus.ERROR:
             error_msg = f"Failed to create service: {service_info.get('error', 'Unknown error')}"
@@ -552,13 +572,13 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
                        status_value="Error",
                        message_type=type(error_msg).__name__,
                        message_value=error_msg,
-                       service_url_type=type("").__name__,
-                       service_url_value="",
-                       model_def_path_type=type("").__name__,
-                       model_def_path_value="")
+                       service_url_type=type(service_info['url']).__name__,
+                       service_url_value=service_info['url'],
+                       model_def_path_type=type(service_info['model_def_path']).__name__,
+                       model_def_path_value=service_info['model_def_path'])
             
             # Create service start error return tuple and log it
-            error_tuple = ("Error", error_msg, "", "")
+            error_tuple = ("Error", error_msg, service_info['url'], service_info['model_def_path'])
             logger.error("Service start error return tuple for Gradio", 
                        return_tuple=error_tuple,
                        tuple_type=type(error_tuple).__name__,
@@ -568,18 +588,27 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
             
         # Return success only if service is actually ready
         progress(1.0, "Service started successfully!")
+        service_url = service_info.get("url", "")
         model_def_path = service_info.get("model_def_path", "")
         service_id = service_info.get("id", "")
-        service_url = service_info.get("url", "")
+        
+        # Ensure service_url and model_def_path are strings, not None
+        if service_url is None:
+            service_url = ""
+            logger.warning("Service URL is None, setting to empty string")
+            
+        if model_def_path is None:
+            model_def_path = ""
+            logger.warning("Model definition path is None, setting to empty string")
         
         # Check if service is in the correct state
         service_status = service_info.get("status", "")
         logger.info("Checking service status before returning", 
                    service_status=service_status,
-                   expected_statuses=[ServiceStatus.READY, ServiceStatus.PROCESSING])
+                   expected_statuses=[ServiceStatus.READY, ServiceStatus.PROCESSING, ServiceStatus.RUNNING])
         
-        # Only return Success if the service is in READY or PROCESSING state
-        if service_status not in [ServiceStatus.READY, ServiceStatus.PROCESSING]:
+        # Only return Success if the service is in READY, PROCESSING, or RUNNING state
+        if service_status not in [ServiceStatus.READY, ServiceStatus.PROCESSING, ServiceStatus.RUNNING]:
             error_msg = f"Service in unexpected state: {service_status}"
             logger.error(error_msg, service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
             
@@ -607,8 +636,8 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         logger.info("Raw values for status boxes", 
                    status_type=type("Success").__name__,
                    status_value="Success",
-                   message_type=type(f"RAG Service created and started. Service ID: {service_id}").__name__,
-                   message_value=f"RAG Service created and started. Service ID: {service_id}",
+                   message_type=type(f"RAG Service created and started. Service ID: {service_info['id']}").__name__,
+                   message_value=f"RAG Service created and started. Service ID: {service_info['id']}",
                    service_url_type=type(service_url).__name__,
                    service_url_value=service_url,
                    model_def_path_type=type(model_def_path).__name__,
@@ -617,14 +646,14 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         # Log the values being returned to the status boxes
         logger.info("Returning values to status boxes", 
                    status="Success",
-                   message=f"RAG Service created and started. Service ID: {service_id}",
+                   message=f"RAG Service created and started. Service ID: {service_info['id']}",
                    service_url=service_url,
                    model_def_path=model_def_path)
         
         # Create return tuple and log it
         return_tuple = (
             "Success", 
-            f"RAG Service created and started. Service ID: {service_id}", 
+            f"RAG Service created and started. Service ID: {service_info['id']}", 
             service_url, 
             model_def_path
         )
