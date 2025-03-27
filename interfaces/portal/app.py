@@ -306,7 +306,7 @@ export RAG_SERVICE_PATH="{service_id}"
 python -m interfaces.cli_app.launch_gradio \\
     --indices-path ./${{RAG_SERVICE_PATH}}/indices \\
     --docs-path ./${{RAG_SERVICE_PATH}}/docs \\
-    --port 7860 \\
+    --port 8000 \\
     --host 0.0.0.0
 """
     
@@ -620,14 +620,14 @@ async def main() -> int:
         interface = create_interface()
         
         print("Launching Gradio server for RAG Service Creator...")
-        print("URL: http://localhost:7861")
+        print("URL: http://localhost:8000")
         
         # Launch server with settings to keep the app running
         interface.launch(
             server_name="0.0.0.0",
-            server_port=7861,
-            share=False,
-            debug=False,
+            server_port=8000,
+            share=True,
+            debug=True,
             prevent_thread_lock=False  # Keep the main thread locked to prevent exit
         )
         
