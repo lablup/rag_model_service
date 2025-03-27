@@ -83,11 +83,12 @@ def parse_args():
         "--port",
         type=int,
         help="Port for the Gradio server",
-        default=7860,
+        default=8000,
     )
     parser.add_argument(
         "--share",
         action="store_true",
+        default=True,
         help="Create a shareable link",
     )
     
