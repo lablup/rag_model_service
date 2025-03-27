@@ -107,24 +107,39 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         # Create model definition file path
         model_def_path = service_dir / f"model-definition-{service_id}.yml"
         
+        # Get environment variables or use defaults
+        backend_model_path = os.environ.get('BACKEND_MODEL_PATH', '/models')
+        rag_service_path = os.environ.get('RAG_SERVICE_PATH', 'rag_services/')
+        port = int(os.environ.get('PORT', '8000'))
+        service_type = os.environ.get('SERVICE_TYPE', 'gradio')
+        
+        logger.info("Using environment variables for model definition", 
+                   backend_model_path=backend_model_path,
+                   rag_service_path=rag_service_path,
+                   port=port,
+                   service_type=service_type)
+        
         # Use the imported function to generate the model definition
         model_definition = gen_model_def(
             github_url=github_url,
             model_name=f"RAG Service for {github_info.repo.replace('-', ' ').replace('_', ' ').title()}",
-            port=8000,
-            service_type='gradio'
+            port=port,
+            service_type=service_type
         )
         
         # Write the model definition to file
         write_model_definition(model_definition, model_def_path)
         
         print(f"Generated model definition: {model_def_path}")
-        logger.info("Generated model definition", path=str(model_def_path))
+        logger.info("Generated model definition", 
+                   path=str(model_def_path),
+                   backend_model_path=backend_model_path,
+                   rag_service_path=rag_service_path)
         
         return model_def_path
         
     except Exception as e:
-        logger.error("Error generating model definition", error=str(e))
+        logger.error("Error generating model definition", error=str(e), traceback=traceback.format_exc())
         print(f"Error generating model definition: {str(e)}")
         return None
                 
@@ -255,10 +270,6 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         if progress_callback:
             progress_callback(0.9, "Preparing service...")
             
-        # Create start.sh script
-        create_start_script(service_id, service_dir)
-        logger.info("Created start script", service_id=service_id, service_dir=str(service_dir))
-        
         # Update service status
         service_info["status"] = ServiceStatus.READY
         logger.info("Service ready to start", service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
