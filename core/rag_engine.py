@@ -2,8 +2,8 @@
 from typing import AsyncGenerator
 import structlog
 
-from rag_model_service.core.retrieval import RetrievalEngine
-from rag_model_service.core.llm import LLMInterface
+from core.retrieval import RetrievalEngine
+from core.llm import LLMInterface
 
 class RAGEngine:
     """Coordinates retrieval and language model components for RAG functionality."""

@@ -11,14 +11,14 @@ Usage:
     python launch_gradio.py --indices-path ./embedding_indices --docs-path ./github_docs
 
 Advanced Options:
-    python launch_gradio.py --indices-path ./my_indices \
-                       --docs-path ./my_docs \
+    python interfaces/cli_app/launch_gradio.py --indices-path ./embedding_indices \
+                       --docs-path ./github_docs \
                        --host 127.0.0.1 \
                        --port 8080 \
                        --share \
-                       --openai-model gpt-4o \
+                       --openai-model gpt-4o-mini \
                        --temperature 0.2 \
-                       --max-results 5 \
+                       --max-results 15 \
                        --title "My Custom Documentation Assistant" \
                        --description "Search through project documentation" \
                        --suggested-questions "How do I install?" "What are the features?"
@@ -36,13 +36,17 @@ from dotenv import load_dotenv
 import gradio as gr
 
 # Ensure project root is in path
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
-from vectordb_manager.vectordb_manager import VectorDBManager
-from app.rag_chatbot import LLMConfig, RAGManager
-from app.gradio_app import create_gradio_interface
+# Import components from the refactored structure
+from config.config import LLMConfig, OpenAIConfig, RetrievalSettings
+from core.llm import LLMInterface
+from core.retrieval import RetrievalEngine
+from core.rag_engine import RAGEngine
+from data.vector_store import VectorStore
+from interfaces.gradio_app.gradio_app import create_gradio_interface
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -168,8 +172,8 @@ def configure_rag_system(args) -> Dict:
         Configuration dictionary
     """
     # Resolve paths
-    indices_path = Path(args.indices_path)
-    docs_path = Path(args.docs_path)
+    indices_path = Path(args.indices_path).resolve()
+    docs_path = Path(args.docs_path).resolve()
     
     # Validate paths
     if not indices_path.exists():
@@ -199,26 +203,19 @@ def configure_rag_system(args) -> Dict:
             "model_name": args.openai_model,
             "temperature": args.temperature,
             "max_results": args.max_results,
-            "streaming": True,
             "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
         },
         "ui": {
-            "title": args.title or f"{args.openai_model} Documentation Assistant",
+            "title": args.title,
             "description": args.description,
-            "suggested_questions": args.suggested_questions or [
-                "What are the main features?",
-                "How do I install this?",
-                "What configuration options are available?",
-                "How do I contribute to this project?",
-                "What license is this project under?",
-            ],
+            "suggested_questions": args.suggested_questions,
         },
     }
     
     return config
 
 
-async def initialize_server(config: Dict) -> Tuple[VectorDBManager, RAGManager]:
+async def initialize_server(config: Dict) -> Tuple[VectorStore, RAGEngine]:
     """
     Initialize the server components.
     
@@ -226,62 +223,50 @@ async def initialize_server(config: Dict) -> Tuple[VectorDBManager, RAGManager]:
         config: Configuration dictionary
         
     Returns:
-        Tuple of VectorDBManager and RAGManager
+        Tuple of VectorStore and RAGManager
     """
     try:
-        # Initialize VectorDBManager
-        vector_manager = VectorDBManager(
-            docs_root=config["paths"]["docs_path"],
-            indices_path=config["paths"]["indices_path"]
+        # Extract paths from config
+        indices_path = config["paths"]["indices_path"]
+        docs_path = config["paths"]["docs_path"]
+        
+        # Initialize vector store
+        logger.info("Initializing vector store...")
+        vector_store = VectorStore(
+            docs_root=docs_path,
+            indices_path=indices_path
         )
         
         # Load vector indices
-        await vector_manager.load_index()
+        logger.info("Loading vector indices...")
+        await vector_store.load_index()
         
-        if not vector_manager.index:
-            logger.warning(
-                "No vector index found, trying to create one",
-                docs_path=str(config["paths"]["docs_path"]),
-                indices_path=str(config["paths"]["indices_path"])
-            )
-            print("No vector index found. Attempting to create one from documentation...")
-            
-            # Collect documents
-            documents = await vector_manager.collect_documents()
-            
-            if not documents:
-                logger.error("No documents found for indexing")
-                print(f"Error: No documents found in {config['paths']['docs_path']}. Please check the path.")
-                return None, None
-            
-            # Create indices
-            await vector_manager.create_indices(documents)
-            
-            # Load the newly created index
-            await vector_manager.load_index()
-            
-            if not vector_manager.index:
-                logger.error("Failed to create vector index")
-                print("Error: Failed to create vector index.")
-                return None, None
-        
-        # Initialize LLMConfig
+        # Initialize LLM settings
         llm_config = LLMConfig(
             openai_api_key=config["llm"]["openai_api_key"],
             model_name=config["llm"]["model_name"],
             temperature=config["llm"]["temperature"],
+            streaming=True,
             max_results=config["llm"]["max_results"],
-            streaming=config["llm"]["streaming"],
         )
         
-        # Initialize RAGManager
-        rag_manager = RAGManager(llm_config, vector_manager)
+        # Initialize retrieval settings
+        retrieval_settings = RetrievalSettings(
+            max_results=config["llm"]["max_results"],
+            docs_path=str(docs_path),
+            indices_path=str(indices_path),
+        )
         
-        return vector_manager, rag_manager
+        # Initialize components
+        llm_interface = LLMInterface(llm_config)
+        retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
+        rag_engine = RAGEngine(retrieval_engine, llm_interface)
+        
+        return vector_store, rag_engine
         
     except Exception as e:
-        logger.error("Error initializing server", error=str(e))
-        print(f"Error initializing server: {str(e)}")
+        logger.error("Error initializing server components", error=str(e))
+        print(f"Error initializing server components: {str(e)}")
         return None, None
 
 
@@ -296,14 +281,40 @@ def customize_gradio_interface(interface: gr.Blocks, config: Dict) -> gr.Blocks:
     Returns:
         Customized Gradio interface
     """
-    interface.title = config["ui"]["title"]
-    
-    # Change suggested questions if provided
-    if "suggested_questions" in config["ui"]:
-        # Find Markdown elements containing "Suggested Questions"
+    # Apply title if provided
+    if config["ui"]["title"]:
+        # Find and update the title markdown
         for component in interface.blocks.values():
-            if isinstance(component, gr.Markdown) and "Suggested Questions" in component.value:
-                component.value = "### Suggested Questions"
+            if isinstance(component, gr.Markdown) and component.value.startswith("# "):
+                component.value = f"# {config['ui']['title']}"
+                break
+    
+    # Apply description if provided
+    if config["ui"]["description"]:
+        # Find and update the description markdown
+        description_found = False
+        for component in interface.blocks.values():
+            if isinstance(component, gr.Markdown) and not component.value.startswith("#"):
+                component.value = config["ui"]["description"]
+                description_found = True
+                break
+        
+        if not description_found:
+            # If no description component found, add one
+            for component in interface.blocks.values():
+                if isinstance(component, gr.Markdown) and component.value.startswith("# "):
+                    # Add description after title
+                    interface.blocks.insert(
+                        list(interface.blocks.keys()).index(id(component)) + 1,
+                        gr.Markdown(config["ui"]["description"])
+                    )
+                    break
+    
+    # Apply suggested questions if provided
+    if config["ui"]["suggested_questions"]:
+        # This is more complex and would require modifying the interface structure
+        # For now, we'll just log that custom questions were provided
+        logger.info("Custom suggested questions provided", questions=config["ui"]["suggested_questions"])
     
     return interface
 
@@ -327,13 +338,16 @@ async def main() -> int:
         config = configure_rag_system(args)
         
         # Initialize server components
-        vector_manager, rag_manager = await initialize_server(config)
+        vector_store, rag_engine = await initialize_server(config)
         
-        if not vector_manager or not rag_manager:
+        if not vector_store or not rag_engine:
             return 1
         
         # Create Gradio interface
-        interface = create_gradio_interface(rag_manager, docs_path=config['paths']['docs_path'])
+        interface = create_gradio_interface(
+            rag_engine=rag_engine, 
+            docs_path=config['paths']['docs_path']
+        )
         
         # Apply customization
         interface = customize_gradio_interface(interface, config)

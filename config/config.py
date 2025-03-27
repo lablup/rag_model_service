@@ -67,6 +67,28 @@ class OpenAIConfig(BaseModel):
     temperature: float = Field(default_factory=lambda: float(os.environ.get("TEMPERATURE", "0.2")))
 
 
+class LLMSettings(BaseModel):
+    """Configuration settings for LLM interface."""
+    
+    openai_api_key: str
+    model_name: str = "gpt-4o"
+    max_tokens: int = 2048
+    temperature: float = 0.2
+    streaming: bool = True
+    memory_k: int = 25
+    base_url: Optional[str] = None
+
+
+class RetrievalSettings(BaseModel):
+    """Configuration settings for retrieval engine."""
+    
+    max_results: int = 5
+    max_tokens_per_doc: int = 8000
+    filter_threshold: float = 0.7
+    docs_path: Optional[str] = None
+    indices_path: Optional[str] = None
+
+
 class RAGConfig(BaseModel):
     """RAG-specific configuration."""
     max_results: int = Field(default_factory=lambda: int(os.environ.get("MAX_RESULTS", "5")))

@@ -9,10 +9,9 @@ A Gradio interface that allows users to:
 4. Generate a model definition YAML file for Backend.AI model service creation
 
 Usage:
-    python rag_service_portal.py
+    python app.py
 """
 
-import asyncio
 import os
 import re
 import subprocess

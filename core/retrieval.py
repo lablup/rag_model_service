@@ -2,9 +2,9 @@
 from typing import Dict, List, Tuple, Any, Optional
 import structlog
 
-from rag_model_service.data.vector_store import VectorStore
-from rag_model_service.data.filtering import DocumentFilter
-from rag_model_service.config.models import RetrievalSettings
+from data.vector_store import VectorStore
+from data.filtering import DocumentFilter
+from config.config import RetrievalSettings
 
 class RetrievalEngine:
     """Handles document retrieval and context preparation for RAG."""
@@ -79,4 +79,3 @@ class RetrievalEngine:
         except Exception as e:
             self.logger.error("Error retrieving context", error=str(e), query=query)
             return f"Error retrieving context: {str(e)}", []
-

@@ -21,7 +21,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
     "messages": [
       {
         "role": "user",
-        "content": "What is AWQ?"
+        "content": "How to setup it?"
       }
     ],
     "stream": false,

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
@@ -14,9 +15,19 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.rag_chatbot import LLMConfig, RAGManager
-from vectordb_manager.vectordb_manager import VectorDBManager
+# Add project root to Python path
+project_root = Path(__file__).resolve().parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
 
+from core.llm import LLMInterface
+from core.retrieval import RetrievalEngine
+from core.rag_engine import RAGEngine
+from data.vector_store import VectorStore
+from config.models import LLMSettings, RetrievalSettings
+
+# Configuration
+VALIDATE_KEY = os.getenv("VALIDATE_API_KEY", "false").lower() == "true"
 
 # --- Pydantic Models ---
 
@@ -139,10 +150,19 @@ app.add_middleware(
 )
 
 # Initialize components
-docs_root = Path("/models/RAGModelService/TensorRT-LLM/docs/source")  # Directory for documentation files
-indices_path = Path("./embedding_indices")  # Directory for vector store indices
-vector_db = None
-rag_manager = None
+# Use local paths relative to the current working directory
+current_dir = Path.cwd()
+docs_path = os.getenv("DOCS_PATH", "docs")
+indices_path = os.getenv("INDICES_PATH", "embedding_indices")
+docs_root = current_dir / docs_path
+indices_root = current_dir / indices_path
+vector_store = None
+rag_engine = None
+
+print(f"Project root: {project_root}")
+print(f"Current directory: {current_dir}")
+print(f"Docs root: {docs_root}")
+print(f"Indices root: {indices_root}")
 
 # API key validator (using environment variable)
 api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", ""))
@@ -151,27 +171,50 @@ api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", ""))
 @app.on_event("startup")
 async def startup_event():
     """Initialize components on startup"""
-    global vector_db, rag_manager
+    global vector_store, rag_engine, docs_root, indices_root
+
+    print(f"Starting up with docs_root: {docs_root}")
+    print(f"Starting up with indices_root: {indices_root}")
 
     # Create necessary directories if they don't exist
-    docs_root.mkdir(exist_ok=True)
-    indices_path.mkdir(exist_ok=True)
+    try:
+        docs_root.mkdir(exist_ok=True, parents=True)
+        indices_root.mkdir(exist_ok=True, parents=True)
+        print(f"Created directories successfully")
+    except Exception as e:
+        print(f"Error creating directories: {str(e)}")
+        # Use fallback paths in the current directory
+        docs_root = Path("./docs")
+        indices_root = Path("./embedding_indices")
+        docs_root.mkdir(exist_ok=True, parents=True)
+        indices_root.mkdir(exist_ok=True, parents=True)
+        print(f"Using fallback paths: docs_root={docs_root}, indices_root={indices_root}")
 
-
-    # Initialize vector database with existing indices path
-    vector_db = VectorDBManager(docs_root=docs_root, indices_path=indices_path)
+    # Initialize vector store
+    vector_store = VectorStore(docs_root=docs_root, indices_path=indices_root)
 
     # Only load existing indices, don't recreate them
-    await vector_db.load_index()
+    await vector_store.load_index()
 
-    # Initialize RAG manager
-    config = LLMConfig(
-        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        model_name="gpt-4o",  # Match the model from RAGManager
-        temperature=0.2,  # Match the temperature from RAGManager
+    # Set up LLM settings
+    llm_settings = LLMSettings(
+        api_key=os.getenv("OPENAI_API_KEY", ""),
+        model_name=os.getenv("MODEL_NAME", "gpt-4o"),
+        temperature=float(os.getenv("TEMPERATURE", "0.2")),
         streaming=True,
     )
-    rag_manager = RAGManager(config=config, vector_store=vector_db)
+    
+    # Set up retrieval settings
+    retrieval_settings = RetrievalSettings(
+        max_results=int(os.getenv("MAX_RESULTS", "5")),
+        docs_path=str(docs_root),
+        indices_path=str(indices_root),
+    )
+    
+    # Initialize components
+    llm_interface = LLMInterface(llm_settings)
+    retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
+    rag_engine = RAGEngine(retrieval_engine, llm_interface)
 
     print("Startup complete - Ready to handle requests")
 
@@ -203,8 +246,8 @@ async def create_chat_completion(
 
         # Collect response chunks
         response_content = ""
-        async for chunk in rag_manager.generate_response(
-            user_input=last_message.content
+        async for chunk in rag_engine.process_query(
+            query=last_message.content
         ):
             response_content += chunk
 
@@ -257,8 +300,8 @@ async def stream_chat_completion(request: ChatCompletionRequest):
             yield json.dumps(first_chunk)
 
             # Stream the content chunks
-            async for chunk in rag_manager.generate_response(
-                user_input=last_message.content
+            async for chunk in rag_engine.process_query(
+                query=last_message.content
             ):
                 response_chunk = {
                     "id": f"chatcmpl-{uuid4()}",

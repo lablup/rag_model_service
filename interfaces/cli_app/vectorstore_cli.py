@@ -84,21 +84,27 @@ def process_documents(
         "-o",
         help="Overlap between chunks",
     ),
+    file_pattern: str = typer.Option(
+        "*.md",
+        "--file-pattern",
+        "-p",
+        help="File pattern to match (e.g., '*.md')",
+    ),
 ):
     """Process documents and create vector indices"""
     console.print(Panel.fit("Processing Documents", style="bold blue"))
     
     async def run():
         try:
+            # Initialize vector store
+            vector_store = VectorStore(docs_path, indices_path)
+            
             # Initialize document processor with custom chunk settings
             doc_processor = DocumentProcessor(
                 docs_root=docs_path,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
-            
-            # Initialize vector store
-            vector_store = VectorStore(docs_path, indices_path)
             
             with Progress(
                 SpinnerColumn(),
@@ -107,11 +113,27 @@ def process_documents(
             ) as progress:
                 # Process documentation
                 task = progress.add_task(description="Processing documentation...", total=None)
-                documents = await vector_store.process_documentation(docs_path, indices_path)
+                
+                # Define a file filter based on the pattern
+                extension = file_pattern.replace("*.", "")
+                file_filter = lambda p: p.is_file() and p.suffix.lstrip(".").lower() == extension
+                
+                # Collect documents using DocumentProcessor
+                documents = await doc_processor.collect_documents(
+                    directory=docs_path,
+                    recursive=True,
+                    chunk=True,
+                    file_filter=file_filter
+                )
                 
                 if not documents:
                     console.print("[yellow]No documents found to process[/yellow]")
                     return
+                
+                progress.update(task, description=f"Creating vector indices for {len(documents)} documents...")
+                
+                # Create vector indices
+                await vector_store.create_indices(documents)
                 
                 progress.update(task, description=f"Processed {len(documents)} documents")
             

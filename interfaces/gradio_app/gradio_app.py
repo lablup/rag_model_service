@@ -1,33 +1,50 @@
 import asyncio
+import aiofiles
+import base64
+import mimetypes
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure project root is in path
-project_root = Path(__file__).parent.parent  # Updated to point to the correct project root
+project_root = Path(__file__).resolve().parent.parent.parent  # Updated to point to the correct project root
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
 import logging
+from dotenv import load_dotenv
 
-import aiofiles
 import gradio as gr
 from pydantic import BaseModel, Field
 from rich.console import Console
 
-from config.config import load_config
-from app.rag_chatbot import LLMConfig, RAGManager
-from vectordb_manager.vectordb_manager import VectorDBManager
+# Load environment variables
+load_dotenv()
+
+# Import components from the refactored structure
+from config.config import LLMConfig, OpenAIConfig, RetrievalSettings
+from core.llm import LLMInterface
+from core.retrieval import RetrievalEngine
+from core.rag_engine import RAGEngine
+from data.vector_store import VectorStore
 
 # Initialize logger and console
 logger = logging.getLogger(__name__)
 console = Console()
 
-# Load configuration
-config = load_config()
+# Default configuration values
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o")
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
+MAX_RESULTS = int(os.getenv("MAX_RESULTS", "5"))
+DOCS_PATH = os.getenv("DOCS_PATH", "/Users/sergeyleksikov/Documents/GitHub/RAGModelService/github_docs/docs")
+INDICES_PATH = os.getenv("INDICES_PATH", str(project_root / "embedding_indices"))
 
+# Service name
 DOC_NAME = os.getenv("RAG_SERVICE_NAME", "gpt-4o")
+
 
 class ChatMessage(BaseModel):
     """Single chat message model"""
@@ -65,6 +82,35 @@ async def read_markdown_file(file_path: str | Path) -> str:
         async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
             content = await f.read()
 
+        # Process Sphinx-style directives
+        import re
+        
+        # Convert :::{image} directives to standard markdown
+        image_directive_pattern = r":::\s*{image}\s*([^\s]+)(?:\s*:alt:\s*([^\n]+))?\s*:::"
+        
+        def replace_image_directive(match):
+            img_path = match.group(1).strip()
+            alt_text = match.group(2).strip() if match.group(2) else "Image"
+            logger.info(f"Converting Sphinx image directive: {img_path} with alt text: {alt_text}")
+            return f"![{alt_text}]({img_path})"
+        
+        content = re.sub(image_directive_pattern, replace_image_directive, content)
+        
+        # Convert :::{figure} directives to standard markdown
+        figure_directive_pattern = r":::\s*{figure}\s*([^\s]+)(?:\s*:align:\s*[^\n]+)?(?:\s*:alt:\s*([^\n]+))?\s*:::"
+        
+        def replace_figure_directive(match):
+            img_path = match.group(1).strip()
+            alt_text = match.group(2).strip() if match.group(2) else "Figure"
+            logger.info(f"Converting Sphinx figure directive: {img_path} with alt text: {alt_text}")
+            return f"![{alt_text}]({img_path})"
+        
+        content = re.sub(figure_directive_pattern, replace_figure_directive, content)
+        
+        # Convert :::{contents} to a simple heading
+        contents_directive_pattern = r":::\s*{contents}[^:]*:::"
+        content = re.sub(contents_directive_pattern, "**Table of Contents**", content)
+
         # Fix image paths
         # Replace relative image paths with base64 encoded images
         file_dir = file_path.parent
@@ -72,89 +118,113 @@ async def read_markdown_file(file_path: str | Path) -> str:
         import mimetypes
         import re
 
-        def replace_image_path(match):
+        # Define the base paths to search for assets
+        base_paths = [
+            Path(DOCS_PATH) / "docs" / "source",  # github_docs/docs/source
+            Path(DOCS_PATH) / "source",           # github_docs/source
+            Path(DOCS_PATH),                      # github_docs
+            Path(DOCS_PATH).parent / "docs" / "source",  # parent/docs/source
+        ]
+
+        def find_asset_file(asset_path):
+            """Find an asset file by trying different base paths"""
+            # If it's an absolute path starting with /assets/
+            if asset_path.startswith("/assets/"):
+                asset_rel_path = asset_path.lstrip("/")
+                
+                # Try each base path
+                for base_path in base_paths:
+                    full_path = base_path / asset_rel_path
+                    logger.info(f"Trying path: {full_path}")
+                    if full_path.exists():
+                        logger.info(f"Found asset at: {full_path}")
+                        return full_path
+                
+                # If not found in standard locations, try a broader search
+                asset_filename = Path(asset_path).name
+                logger.info(f"Asset not found in standard locations. Searching for filename: {asset_filename}")
+                
+                # Search in the repository
+                for root, dirs, files in os.walk(Path(DOCS_PATH).parent):
+                    if asset_filename in files:
+                        full_path = Path(root) / asset_filename
+                        logger.info(f"Found asset by filename at: {full_path}")
+                        return full_path
+            
+            # If it's a relative path
+            else:
+                # First try relative to the current file
+                rel_path = file_dir / asset_path
+                logger.info(f"Trying relative path: {rel_path}")
+                if rel_path.exists():
+                    logger.info(f"Found asset at: {rel_path}")
+                    return rel_path
+            
+            # Asset not found
+            logger.warning(f"Asset not found: {asset_path}")
+            return None
+
+        # Process HTML img tags
+        def process_html_img(match):
             img_tag = match.group(0)
-            if 'src="' in img_tag:
-                # Handle HTML img tags
-                src_pattern = r'src="([^"]+)"'
-                src_match = re.search(src_pattern, img_tag)
-                if src_match:
-                    img_path = src_match.group(1)
-                    if not img_path.startswith(("http://", "https://", "data:")):
-                        # Convert the path to be relative to assets/images
-                        rel_path = Path(img_path).name
-                        # Use the docs_root from config instead of hardcoded path
-                        try:
-                            doc_rel_path = file_path.relative_to(config.paths.docs_root)
-                            img_file = (
-                                project_root
-                                / "rag_service"
-                                / "docs"
-                                / "assets"
-                                / "images"
-                                / doc_rel_path.parent
-                                / rel_path
-                            )
-                            if img_file.exists():
-                                mime_type = mimetypes.guess_type(img_file)[0]
-                                with open(img_file, "rb") as f:
-                                    img_data = base64.b64encode(f.read()).decode()
-                                return img_tag.replace(
-                                    f'src="{img_path}"',
-                                    f'src="data:{mime_type};base64,{img_data}"',
-                                )
-                        except ValueError:
-                            # If the file is not in the docs_root, try a direct approach
-                            logger.warning(f"File {file_path} is not in the docs_root, trying direct path")
-                            img_file = file_path.parent / img_path
-                            if img_file.exists():
-                                mime_type = mimetypes.guess_type(img_file)[0]
-                                with open(img_file, "rb") as f:
-                                    img_data = base64.b64encode(f.read()).decode()
-                                return img_tag.replace(
-                                    f'src="{img_path}"',
-                                    f'src="data:{mime_type};base64,{img_data}"',
-                                )
-            elif "![" in img_tag:
-                # Handle Markdown image syntax
-                md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-                md_match = re.match(md_pattern, img_tag)
-                if md_match:
-                    alt_text = md_match.group(1)
-                    img_path = md_match.group(2)
-                    if not img_path.startswith(("http://", "https://", "data:")):
-                        # Convert the path to be relative to assets/images
-                        rel_path = Path(img_path).name
-                        try:
-                            doc_rel_path = file_path.relative_to(config.paths.docs_root)
-                            img_file = (
-                                project_root
-                                / "rag_service"
-                                / "docs"
-                                / "assets"
-                                / "images"
-                                / doc_rel_path.parent
-                                / rel_path
-                            )
-                            if img_file.exists():
-                                mime_type = mimetypes.guess_type(img_file)[0]
-                                with open(img_file, "rb") as f:
-                                    img_data = base64.b64encode(f.read()).decode()
-                                return f"![{alt_text}](data:{mime_type};base64,{img_data})"
-                        except ValueError:
-                            # If the file is not in the docs_root, try a direct approach
-                            logger.warning(f"File {file_path} is not in the docs_root, trying direct path")
-                            img_file = file_path.parent / img_path
-                            if img_file.exists():
-                                mime_type = mimetypes.guess_type(img_file)[0]
-                                with open(img_file, "rb") as f:
-                                    img_data = base64.b64encode(f.read()).decode()
-                                return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+            src_pattern = r'src="([^"]+)"'
+            src_match = re.search(src_pattern, img_tag)
+            
+            if src_match:
+                img_path = src_match.group(1)
+                
+                # Skip external URLs and data URIs
+                if img_path.startswith(("http://", "https://", "data:")):
+                    return img_tag
+                
+                # Find the asset file
+                img_file = find_asset_file(img_path)
+                
+                # If found, encode it
+                if img_file:
+                    mime_type = mimetypes.guess_type(img_file)[0]
+                    with open(img_file, "rb") as f:
+                        img_data = base64.b64encode(f.read()).decode()
+                    return img_tag.replace(
+                        f'src="{img_path}"',
+                        f'src="data:{mime_type};base64,{img_data}"',
+                    )
+            
             return img_tag
 
-        # Match both HTML img tags and Markdown image syntax
-        image_pattern = r"<img[^>]+>|!\[[^\]]*\]\([^)]+\)"
-        content = re.sub(image_pattern, replace_image_path, content)
+        # Process Markdown image syntax
+        def process_markdown_img(match):
+            img_tag = match.group(0)
+            md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+            md_match = re.match(md_pattern, img_tag)
+            
+            if md_match:
+                alt_text = md_match.group(1)
+                img_path = md_match.group(2)
+                
+                # Skip external URLs and data URIs
+                if img_path.startswith(("http://", "https://", "data:")):
+                    return img_tag
+                
+                # Find the asset file
+                img_file = find_asset_file(img_path)
+                
+                # If found, encode it
+                if img_file:
+                    mime_type = mimetypes.guess_type(img_file)[0]
+                    with open(img_file, "rb") as f:
+                        img_data = base64.b64encode(f.read()).decode()
+                    return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+            
+            return img_tag
+
+        # Process HTML img tags
+        html_img_pattern = r'<img[^>]+>'
+        content = re.sub(html_img_pattern, process_html_img, content)
+        
+        # Process markdown image syntax
+        md_img_pattern = r'!\[[^\]]*\]\([^)]+\)'
+        content = re.sub(md_img_pattern, process_markdown_img, content)
 
         logger.info(f"Successfully read {len(content)} characters")
         logger.info(f"Content preview: {content[:200]}")
@@ -165,20 +235,34 @@ async def read_markdown_file(file_path: str | Path) -> str:
         return f"Error: {error_msg}"
 
 
+async def process_query_with_rag(query: str, rag_engine: RAGEngine) -> str:
+    """Process a query using the RAG engine and return the full response"""
+    full_response = ""
+    async for chunk in rag_engine.process_query(query):
+        full_response += chunk
+    return full_response
+
+
 def create_gradio_interface(
-    rag_manager: RAGManager,
+    rag_engine: RAGEngine,
     docs_path: Optional[Path] = None,
+    indices_path: Optional[Path] = None,
 ) -> gr.Blocks:
     """Create Gradio interface for the RAG chat application
     
     Args:
-        rag_manager: RAG manager instance
+        rag_engine: RAG engine instance
         docs_path: Optional custom path to documentation files. If None, uses default from config.
+        indices_path: Optional custom path to vector indices. If None, uses default from config.
     """
     
     # Use custom docs_path if provided, otherwise use default from config
-    actual_docs_path = docs_path if docs_path is not None else config.paths.docs_root
+    actual_docs_path = docs_path if docs_path is not None else Path(DOCS_PATH)
     logger.info(f"Using documentation path: {actual_docs_path}")
+    
+    # Use custom indices_path if provided, otherwise use default from config
+    actual_indices_path = indices_path if indices_path is not None else Path(INDICES_PATH)
+    logger.info(f"Using indices path: {actual_indices_path}")
     
     # Create a custom read_markdown_file function that uses the actual_docs_path
     async def custom_read_markdown_file(file_path: str | Path) -> str:
@@ -199,6 +283,35 @@ def create_gradio_interface(
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
 
+            # Process Sphinx-style directives
+            import re
+            
+            # Convert :::{image} directives to standard markdown
+            image_directive_pattern = r":::\s*{image}\s*([^\s]+)(?:\s*:alt:\s*([^\n]+))?\s*:::"
+            
+            def replace_image_directive(match):
+                img_path = match.group(1).strip()
+                alt_text = match.group(2).strip() if match.group(2) else "Image"
+                logger.info(f"Converting Sphinx image directive: {img_path} with alt text: {alt_text}")
+                return f"![{alt_text}]({img_path})"
+            
+            content = re.sub(image_directive_pattern, replace_image_directive, content)
+            
+            # Convert :::{figure} directives to standard markdown
+            figure_directive_pattern = r":::\s*{figure}\s*([^\s]+)(?:\s*:align:\s*[^\n]+)?(?:\s*:alt:\s*([^\n]+))?\s*:::"
+            
+            def replace_figure_directive(match):
+                img_path = match.group(1).strip()
+                alt_text = match.group(2).strip() if match.group(2) else "Figure"
+                logger.info(f"Converting Sphinx figure directive: {img_path} with alt text: {alt_text}")
+                return f"![{alt_text}]({img_path})"
+            
+            content = re.sub(figure_directive_pattern, replace_figure_directive, content)
+            
+            # Convert :::{contents} to a simple heading
+            contents_directive_pattern = r":::\s*{contents}[^:]*:::"
+            content = re.sub(contents_directive_pattern, "**Table of Contents**", content)
+
             # Fix image paths
             # Replace relative image paths with base64 encoded images
             file_dir = file_path.parent
@@ -206,89 +319,113 @@ def create_gradio_interface(
             import mimetypes
             import re
 
-            def replace_image_path(match):
+            # Define the base paths to search for assets
+            base_paths = [
+                actual_docs_path / "docs" / "source",  # github_docs/docs/source
+                actual_docs_path / "source",           # github_docs/source
+                actual_docs_path,                      # github_docs
+                actual_docs_path.parent / "docs" / "source",  # parent/docs/source
+            ]
+
+            def find_asset_file(asset_path):
+                """Find an asset file by trying different base paths"""
+                # If it's an absolute path starting with /assets/
+                if asset_path.startswith("/assets/"):
+                    asset_rel_path = asset_path.lstrip("/")
+                    
+                    # Try each base path
+                    for base_path in base_paths:
+                        full_path = base_path / asset_rel_path
+                        logger.info(f"Trying path: {full_path}")
+                        if full_path.exists():
+                            logger.info(f"Found asset at: {full_path}")
+                            return full_path
+                    
+                    # If not found in standard locations, try a broader search
+                    asset_filename = Path(asset_path).name
+                    logger.info(f"Asset not found in standard locations. Searching for filename: {asset_filename}")
+                    
+                    # Search in the repository
+                    for root, dirs, files in os.walk(actual_docs_path.parent):
+                        if asset_filename in files:
+                            full_path = Path(root) / asset_filename
+                            logger.info(f"Found asset by filename at: {full_path}")
+                            return full_path
+                
+                # If it's a relative path
+                else:
+                    # First try relative to the current file
+                    rel_path = file_dir / asset_path
+                    logger.info(f"Trying relative path: {rel_path}")
+                    if rel_path.exists():
+                        logger.info(f"Found asset at: {rel_path}")
+                        return rel_path
+                
+                # Asset not found
+                logger.warning(f"Asset not found: {asset_path}")
+                return None
+
+            # Process HTML img tags
+            def process_html_img(match):
                 img_tag = match.group(0)
-                if 'src="' in img_tag:
-                    # Handle HTML img tags
-                    src_pattern = r'src="([^"]+)"'
-                    src_match = re.search(src_pattern, img_tag)
-                    if src_match:
-                        img_path = src_match.group(1)
-                        if not img_path.startswith(("http://", "https://", "data:")):
-                            # Convert the path to be relative to assets/images
-                            rel_path = Path(img_path).name
-                            # Use the actual_docs_path instead of config.paths.docs_root
-                            try:
-                                doc_rel_path = file_path.relative_to(actual_docs_path)
-                                img_file = (
-                                    project_root
-                                    / "rag_service"
-                                    / "docs"
-                                    / "assets"
-                                    / "images"
-                                    / doc_rel_path.parent
-                                    / rel_path
-                                )
-                                if img_file.exists():
-                                    mime_type = mimetypes.guess_type(img_file)[0]
-                                    with open(img_file, "rb") as f:
-                                        img_data = base64.b64encode(f.read()).decode()
-                                    return img_tag.replace(
-                                        f'src="{img_path}"',
-                                        f'src="data:{mime_type};base64,{img_data}"',
-                                    )
-                            except ValueError:
-                                # If the file is not in the docs_root, try a direct approach
-                                logger.warning(f"File {file_path} is not in the actual_docs_path, trying direct path")
-                                img_file = file_path.parent / img_path
-                                if img_file.exists():
-                                    mime_type = mimetypes.guess_type(img_file)[0]
-                                    with open(img_file, "rb") as f:
-                                        img_data = base64.b64encode(f.read()).decode()
-                                    return img_tag.replace(
-                                        f'src="{img_path}"',
-                                        f'src="data:{mime_type};base64,{img_data}"',
-                                    )
-                elif "![" in img_tag:
-                    # Handle Markdown image syntax
-                    md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-                    md_match = re.match(md_pattern, img_tag)
-                    if md_match:
-                        alt_text = md_match.group(1)
-                        img_path = md_match.group(2)
-                        if not img_path.startswith(("http://", "https://", "data:")):
-                            # Convert the path to be relative to assets/images
-                            rel_path = Path(img_path).name
-                            try:
-                                doc_rel_path = file_path.relative_to(actual_docs_path)
-                                img_file = (
-                                    project_root
-                                    / "rag_service"
-                                    / "docs"
-                                    / "assets"
-                                    / "images"
-                                    / doc_rel_path.parent
-                                    / rel_path
-                                )
-                                if img_file.exists():
-                                    mime_type = mimetypes.guess_type(img_file)[0]
-                                    with open(img_file, "rb") as f:
-                                        img_data = base64.b64encode(f.read()).decode()
-                                    return f"![{alt_text}](data:{mime_type};base64,{img_data})"
-                            except ValueError:
-                                # If the file is not in the docs_root, try a direct approach
-                                logger.warning(f"File {file_path} is not in the actual_docs_path, trying direct path")
-                                img_file = file_path.parent / img_path
-                                if img_file.exists():
-                                    mime_type = mimetypes.guess_type(img_file)[0]
-                                    with open(img_file, "rb") as f:
-                                        img_data = base64.b64encode(f.read()).decode()
-                                    return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+                src_pattern = r'src="([^"]+)"'
+                src_match = re.search(src_pattern, img_tag)
+                
+                if src_match:
+                    img_path = src_match.group(1)
+                    
+                    # Skip external URLs and data URIs
+                    if img_path.startswith(("http://", "https://", "data:")):
+                        return img_tag
+                    
+                    # Find the asset file
+                    img_file = find_asset_file(img_path)
+                    
+                    # If found, encode it
+                    if img_file:
+                        mime_type = mimetypes.guess_type(img_file)[0]
+                        with open(img_file, "rb") as f:
+                            img_data = base64.b64encode(f.read()).decode()
+                        return img_tag.replace(
+                            f'src="{img_path}"',
+                            f'src="data:{mime_type};base64,{img_data}"',
+                        )
+                
                 return img_tag
 
-            # Match both HTML img tags and Markdown image syntax
-            image_pattern = r"<img[^>]+>|!\[[^\]]*\]\([^)]+\)"
-            content = re.sub(image_pattern, replace_image_path, content)
+            # Process Markdown image syntax
+            def process_markdown_img(match):
+                img_tag = match.group(0)
+                md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+                md_match = re.match(md_pattern, img_tag)
+                
+                if md_match:
+                    alt_text = md_match.group(1)
+                    img_path = md_match.group(2)
+                    
+                    # Skip external URLs and data URIs
+                    if img_path.startswith(("http://", "https://", "data:")):
+                        return img_tag
+                    
+                    # Find the asset file
+                    img_file = find_asset_file(img_path)
+                    
+                    # If found, encode it
+                    if img_file:
+                        mime_type = mimetypes.guess_type(img_file)[0]
+                        with open(img_file, "rb") as f:
+                            img_data = base64.b64encode(f.read()).decode()
+                        return f"![{alt_text}](data:{mime_type};base64,{img_data})"
+                
+                return img_tag
+
+            # Process HTML img tags
+            html_img_pattern = r'<img[^>]+>'
+            content = re.sub(html_img_pattern, process_html_img, content)
+            
+            # Process markdown image syntax
+            md_img_pattern = r'!\[[^\]]*\]\([^)]+\)'
+            content = re.sub(md_img_pattern, process_markdown_img, content)
 
             logger.info(f"Successfully read {len(content)} characters")
             logger.info(f"Content preview: {content[:200]}")
@@ -301,13 +438,13 @@ def create_gradio_interface(
     async def process_message(
         message: str,
         state: Any,
-    ) -> Tuple[List[Dict[str, str]], str, str, List[List[str]], str, ChatState]:
+    ) -> Tuple[List[Tuple[str, str]], str, str, List[List[str]], str, ChatState]:
         """Process user message and update interface components"""
         if not message.strip():
             if not isinstance(state, ChatState):
                 state = ChatState()
             return (
-                [{"role": msg.role, "content": msg.content} for msg in state.messages],
+                [],
                 "",
                 "",
                 [],
@@ -326,11 +463,16 @@ def create_gradio_interface(
             # Get context and retrieved results
             logger.info("Getting relevant context...")
             try:
-                context, retrieved_results = await rag_manager._get_relevant_context(message)
+                context, retrieved_results = await rag_engine.retrieval_engine.get_relevant_context(message)
             except Exception as e:
                 logger.error(f"Error getting context: {e}")
                 return (
-                    "I encountered an error retrieving the context. Please try again."
+                    [],
+                    message,
+                    "",
+                    [],
+                    "",
+                    state,
                 )
 
             # Clear existing documents in state
@@ -351,11 +493,33 @@ def create_gradio_interface(
                 
                 relative_path = metadata["relative_path"]
                 doc_name = f"{relative_path} (score: {score:.2f})"
-                full_path = actual_docs_path / relative_path
-
-                # Verify file exists before adding
-                if not full_path.exists():
-                    logger.warning(f"File not found: {full_path}")
+                
+                # Try different path combinations to find the document
+                possible_paths = [
+                    actual_docs_path / relative_path,  # Original path
+                    actual_docs_path / "source" / relative_path,  # Try with source prefix
+                    Path(str(actual_docs_path).replace("/docs", "")) / relative_path,  # Try without docs
+                    # Try with docs/source prefix for paths that start with source/
+                    actual_docs_path / relative_path.replace("source/", "", 1) if relative_path.startswith("source/") else Path(""),
+                    # Try the exact path that exists for tpu.inc.md
+                    Path("/Users/sergeyleksikov/Documents/GitHub/RAGModelService/github_docs/docs/source") / relative_path.replace("source/", "", 1) if relative_path.startswith("source/") else Path(""),
+                    # Try with just the filename
+                    actual_docs_path / Path(relative_path).name,
+                    actual_docs_path / "source" / Path(relative_path).name,
+                ]
+                
+                full_path = None
+                for path in possible_paths:
+                    if path.exists():
+                        full_path = path
+                        logger.info(f"Found document at: {full_path}")
+                        break
+                    else:
+                        logger.debug(f"Tried path: {path} - not found")
+                
+                # Skip if file not found in any location
+                if not full_path:
+                    logger.warning(f"File not found in any location: {relative_path}")
                     continue
 
                 state.current_docs[doc_name] = str(full_path)
@@ -365,18 +529,16 @@ def create_gradio_interface(
             logger.info(f"Documents in state: {list(state.current_docs.keys())}")
 
             # Generate response
-            full_response = ""
-            async for chunk in rag_manager.generate_response_with_context(
-                message, context
-            ):
-                full_response += chunk
+            full_response = await process_query_with_rag(message, rag_engine)
 
             # Add assistant response to state
             state.messages.append(ChatMessage(role="assistant", content=full_response))
 
-            # Convert messages to the new Gradio chatbot format with roles
+            # Convert messages to the format expected by Gradio chatbot (list of tuples)
             chat_messages = [
-                {"role": msg.role, "content": msg.content} for msg in state.messages
+                (msg.content if msg.role == "user" else None, 
+                 msg.content if msg.role == "assistant" else None) 
+                for msg in state.messages
             ]
 
             # Return updated UI components
@@ -396,19 +558,55 @@ def create_gradio_interface(
                 ),
                 state,  # Return the state
             )
-
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
             if not isinstance(state, ChatState):
                 state = ChatState()
-            return [], "", f"Error: {str(e)}", [], "", state
+            # Add error message to chat
+            error_message = f"Error: {str(e)}"
+            state.messages.append(ChatMessage(role="assistant", content=error_message))
+            chat_messages = [
+                (msg.content if msg.role == "user" else None, 
+                 msg.content if msg.role == "assistant" else None) 
+                for msg in state.messages
+            ]
+            return chat_messages, "", error_message, [], "", state
 
     # Create Gradio interface
     with gr.Blocks(
         title=f"{DOC_NAME} Documentation Assistant",
         theme=gr.themes.Base(),
         css="""
-
+        /* Hide New Row and New Column buttons in document viewer */
+        .doc-column .controls-wrap {
+            display: none !important;
+        }
+        
+        /* Additional styling for better UI */
+        .container {
+            gap: 20px;
+        }
+        .chat-column {
+            min-width: 400px;
+        }
+        .doc-column {
+            min-width: 500px;
+        }
+        .wide-input {
+            width: 100%;
+        }
+        .markdown-body pre {
+            background-color: #2d2d2d !important;
+            color: #f8f8f2 !important;
+            padding: 16px !important;
+            border-radius: 5px !important;
+        }
+        .markdown-body code {
+            background-color: #2d2d2d !important;
+            color: #f8f8f2 !important;
+            padding: 0.2em 0.4em !important;
+            border-radius: 3px !important;
+        }
         """,
     ) as interface:
         # Initialize chat state with default ChatState instance
@@ -430,7 +628,6 @@ def create_gradio_interface(
                     label="Chat History",
                     height=400,
                     container=True,
-                    type="messages",
                     elem_classes="chat-history",
                 )
 
@@ -565,42 +762,65 @@ def create_gradio_interface(
     return interface
 
 
-async def main(docs_path: Optional[Path] = None):
+async def main(docs_path: Optional[Path] = None, indices_path: Optional[Path] = None):
     """Main entry point
     
     Args:
         docs_path: Optional custom path to documentation files. If None, uses default from config.
+        indices_path: Optional custom path to vector indices. If None, uses default from config.
     """
     try:
         # Use custom docs_path if provided, otherwise use default from config
-        actual_docs_path = docs_path if docs_path is not None else config.paths.docs_root
+        actual_docs_path = docs_path if docs_path is not None else Path(DOCS_PATH)
         logger.info(f"Using documentation path: {actual_docs_path}")
         
+        # Use custom indices_path if provided, otherwise use default from config
+        actual_indices_path = indices_path if indices_path is not None else Path(INDICES_PATH)
+        logger.info(f"Using indices path: {actual_indices_path}")
+        
+        # Create necessary directories
+        actual_docs_path.mkdir(exist_ok=True, parents=True)
+        actual_indices_path.mkdir(exist_ok=True, parents=True)
+        
         # Initialize vector store
-        vector_store = VectorDBManager(
-            docs_root=actual_docs_path, indices_path=config.paths.indices_path
+        vector_store = VectorStore(
+            docs_root=actual_docs_path, indices_path=actual_indices_path
         )
 
         # Load vector indices
         await vector_store.load_index()
 
-        # Initialize RAG manager
+        # Initialize LLM settings
         llm_config = LLMConfig(
-            openai_api_key=config.openai.api_key,
-            model_name=config.openai.model_name,
-            temperature=config.openai.temperature,
-            max_results=config.rag.max_results,
+            openai_api_key=OPENAI_API_KEY,
+            model_name=MODEL_NAME,
+            temperature=TEMPERATURE,
             streaming=True,
+            max_results=MAX_RESULTS,
         )
-
-        rag_manager = RAGManager(llm_config, vector_store)
+        
+        # Initialize retrieval settings
+        retrieval_settings = RetrievalSettings(
+            max_results=MAX_RESULTS,
+            docs_path=str(actual_docs_path),
+            indices_path=str(actual_indices_path),
+        )
+        
+        # Initialize components
+        llm_interface = LLMInterface(llm_config)
+        retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
+        rag_engine = RAGEngine(retrieval_engine, llm_interface)
 
         # Create and launch Gradio interface
-        interface = create_gradio_interface(rag_manager, docs_path=actual_docs_path)
+        interface = create_gradio_interface(
+            rag_engine=rag_engine, 
+            docs_path=actual_docs_path,
+            indices_path=actual_indices_path
+        )
         interface.launch(
-            server_name=config.server.host,
-            server_port=config.server.port,
-            share=config.server.share_enabled,
+            server_name="0.0.0.0",
+            server_port=7860,
+            share=True,
             debug=True,
         )
     except Exception as e:

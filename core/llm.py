@@ -7,12 +7,12 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
-from rag_model_service.config.models import LLMSettings
+from config.config import LLMConfig
 
 class LLMInterface:
     """Interface for language model interactions."""
     
-    def __init__(self, settings: LLMSettings):
+    def __init__(self, settings: LLMConfig):
         """
         Initialize the LLM interface.
         
@@ -24,7 +24,7 @@ class LLMInterface:
         
         # Initialize ChatOpenAI
         self.llm = ChatOpenAI(
-            openai_api_key=settings.api_key,
+            openai_api_key=settings.openai_api_key,
             model_name=settings.model_name,
             temperature=settings.temperature,
             streaming=settings.streaming,
