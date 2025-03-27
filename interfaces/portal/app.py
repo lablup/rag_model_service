@@ -44,6 +44,8 @@ from data.vector_store import VectorStore
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
 from config.config import LLMConfig
+from interfaces.portal.generate_model_definition import generate_model_definition as gen_model_def
+from interfaces.portal.generate_model_definition import write_model_definition
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -101,54 +103,20 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         github_info = parse_github_url(github_url)
         service_id = service_dir.name
         
-        # Create model definition file
-        model_def_path = service_dir / f"rag-{service_id}.yml"
+        # Create model definition file path
+        model_def_path = service_dir / f"model-definition-{service_id}.yml"
         
-        repo_name = github_info.repo
-        repo_title = repo_name.replace("-", " ").replace("_", " ").title()
+        # Use the imported function to generate the model definition
+        model_definition = gen_model_def(
+            github_url=github_url,
+            model_name=f"RAG Service for {github_info.repo.replace('-', ' ').replace('_', ' ').title()}",
+            port=8000,
+            service_type='gradio'
+        )
         
-        # Create model definition YAML
-        model_def = f"""
-# Model Definition for RAG Service: {repo_title}
-model:
-  name: rag-{service_id}
-  version: 0.1.0
-  description: RAG Service for {repo_title} Documentation
-  type: inference
-  vendor: ai
-  labels:
-    source: {github_info.owner}/{github_info.repo}
-    branch: {github_info.branch}
-    service_id: {service_id}
-    created_time: {time.strftime("%Y-%m-%d %H:%M:%S")}
-    
-# Runtime configuration
-runtime:
-  type: python
-  path: /opt/rag/
-  command:
-    - ./start.sh
-  gpu:
-    min: 0
-    max: 0
-  memory:
-    min: 1g
-    max: 4g
-    
-# Service configuration
-service:
-  ports:
-    - name: gradio
-      protocol: http
-      port: 7860
-  models:
-    - path: /{service_id}
-"""
+        # Write the model definition to file
+        write_model_definition(model_definition, model_def_path)
         
-        # Write model definition to file
-        with open(model_def_path, "w") as f:
-            f.write(model_def)
-            
         print(f"Generated model definition: {model_def_path}")
         logger.info("Generated model definition", path=str(model_def_path))
         

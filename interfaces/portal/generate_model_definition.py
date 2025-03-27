@@ -199,15 +199,18 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
     # Determine the docs path argument
     docs_path_arg = path if path else ""
     
+    # For service ID, we'll use the owner/repo format or a custom ID if provided
+    service_id = f"{owner}/{repo}"
+    
     # Determine the start command based on service type
     if service_type == 'gradio':
         start_command = [
             'python3',
             '/models/RAGModelService/interfaces/gradio_app/gradio_app.py',
             '--indices-path',
-            f'/models/RAGModelService/rag_services/{owner}/{repo}/indices',
+            f'/models/RAGModelService/rag_services/{service_id}/indices',
             '--docs-path',
-            f'/models/RAGModelService/rag_services/{owner}/{repo}/docs',
+            f'/models/RAGModelService/rag_services/{service_id}/docs',
             '--host',
             '0.0.0.0',
             '--port',
@@ -218,9 +221,9 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
             'python3',
             '/models/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
             '--indices-path',
-            f'/models/RAGModelService/rag_services/{owner}/{repo}/indices',
+            f'/models/RAGModelService/rag_services/{service_id}/indices',
             '--docs-path',
-            f'/models/RAGModelService/rag_services/{owner}/{repo}/docs',
+            f'/models/RAGModelService/rag_services/{service_id}/docs',
             '--host',
             '0.0.0.0',
             '--port',
@@ -234,16 +237,16 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
                 'name': model_name,
                 'model_path': '/models',
                 'service': {
+                    'port': port,
                     'pre_start_actions': [
                         {
                             'action': 'run_command',
                             'args': {
-                                'command': ['/bin/bash', '/models/RAGModelService/setup.sh']
+                                'command': ['/bin/bash', '/models/RAGModelService/deployment/scripts/setup.sh']
                             }
                         }
                     ],
-                    'start_command': start_command,
-                    'port': port
+                    'start_command': start_command
                 }
             }
         ]
