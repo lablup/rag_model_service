@@ -12,7 +12,6 @@ This module provides functionality for:
 
 import asyncio
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any, Callable
@@ -26,7 +25,9 @@ from langchain_text_splitters import (
     TokenTextSplitter
 )
 from pydantic import BaseModel, Field
-from git import Repo
+
+# Import GitHub utilities
+from utils.github_utils import GitHubInfo, parse_github_url, clone_github_repo
 
 class DocumentMetadata(BaseModel):
     """Metadata for processed documents"""
@@ -446,3 +447,97 @@ class DocumentProcessor:
             self.logger.error("Error processing documentation", error=str(e))
             print(f"Error processing documentation: {str(e)}")
             raise
+
+    async def clone_github_repository(
+        self, 
+        github_url: str, 
+        target_dir: Union[str, Path]
+    ) -> Tuple[Path, Optional[Exception]]:
+        """
+        Clone a GitHub repository and return the documentation path.
+        
+        Args:
+            github_url: GitHub URL of the repository
+            target_dir: Directory to clone the repository to
+            
+        Returns:
+            Tuple of (documentation path, exception if any)
+        """
+        try:
+            # Parse GitHub URL using github_utils
+            github_info = parse_github_url(github_url)
+            
+            print(f"Cloning {github_info.owner}/{github_info.repo} ({github_info.branch})...")
+            
+            # Clone the repository using github_utils
+            docs_path, error = clone_github_repo(github_info, target_dir)
+            
+            if error:
+                self.logger.error(
+                    "Error cloning repository", 
+                    repo=f"{github_info.owner}/{github_info.repo}",
+                    error=str(error)
+                )
+                return target_dir, error
+            
+            print(f"Documentation path: {docs_path}")
+            
+            # Update the docs_root for future operations
+            self.docs_root = docs_path
+            
+            return docs_path, None
+            
+        except Exception as e:
+            self.logger.error("Error cloning GitHub repository", error=str(e))
+            print(f"Error cloning GitHub repository: {str(e)}")
+            return Path(target_dir), e
+
+    async def process_github_repository(
+        self,
+        github_url: str,
+        target_dir: Union[str, Path],
+        vector_store_manager: Any
+    ) -> Tuple[List[Document], Path, Optional[Exception]]:
+        """
+        Process a GitHub repository for RAG.
+        
+        This function:
+        1. Clones the repository
+        2. Processes its documents
+        3. Creates vector indices
+        
+        Args:
+            github_url: GitHub URL of the repository
+            target_dir: Directory to clone the repository to
+            vector_store_manager: Vector store manager instance
+            
+        Returns:
+            Tuple of (processed documents, docs path, exception if any)
+        """
+        try:
+            # Clone the repository
+            docs_path, error = await self.clone_github_repository(github_url, target_dir)
+            
+            if error:
+                return [], docs_path, error
+            
+            # Process documentation
+            documents = await self.process_documentation(docs_path, vector_store_manager)
+            
+            if not documents:
+                self.logger.warning(
+                    "No documents found in repository",
+                    repo=github_url,
+                    docs_path=str(docs_path)
+                )
+                return [], docs_path, None
+            
+            return documents, docs_path, None
+            
+        except Exception as e:
+            self.logger.error(
+                "Error processing GitHub repository",
+                repo=github_url,
+                error=str(e)
+            )
+            return [], Path(target_dir), e

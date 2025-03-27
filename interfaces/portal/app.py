@@ -25,11 +25,25 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 import gradio as gr
 from dotenv import load_dotenv
 import structlog
+import asyncio
 
 # Ensure project root is in path
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
+
+# Import utility modules
+from utils.github_utils import validate_github_url, parse_github_url, GitHubInfo
+from utils.service_utils import (
+    setup_environment, 
+    get_unique_service_id,
+    ServiceStatus
+)
+from core.document_processor import DocumentProcessor
+from data.vector_store import VectorStore
+from core.llm import LLMInterface
+from core.rag_engine import RAGEngine
+from config.config import LLMConfig
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -37,53 +51,20 @@ logger = structlog.get_logger()
 # Global state to track running services
 SERVICES = {}
 
-class ServiceStatus:
-    PENDING = "pending"
-    PROCESSING = "processing"
-    READY = "ready"
-    ERROR = "error"
-
-
-def validate_github_url(url: str) -> bool:
-    """
-    Validate a GitHub URL.
-    
-    Args:
-        url: URL to validate
-        
-    Returns:
-        True if the URL is valid, False otherwise
-    """
-    if not url:
-        return False
-        
-    # Basic GitHub URL pattern
-    pattern = r"^https?://github\.com/[^/]+/[^/]+(?:/tree/[^/]+(?:/.*)?)?$"
-    return bool(re.match(pattern, url))
-
-
-def get_unique_service_id() -> str:
-    """Generate a unique service ID"""
-    return str(uuid.uuid4())[:8]
-
 
 def find_available_port(start_port: int = 8000, end_port: int = 9000) -> int:
     """Find an available port in the specified range"""
     import socket
     
-    # Check if port is already in use by a service
-    used_ports = [s["port"] for s in SERVICES.values() if "port" in s]
-    
     for port in range(start_port, end_port):
-        if port in used_ports:
-            continue
-            
-        # Check if port is available
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            # If the connect fails, the port is available
+            result = sock.connect_ex(('localhost', port))
+            if result != 0:
                 return port
-    
-    raise RuntimeError(f"No available ports in range {start_port}-{end_port}")
+                
+    # If no port is available, return the start port and hope for the best
+    return start_port
 
 
 def create_service_directory(service_id: str) -> Path:
@@ -96,12 +77,16 @@ def create_service_directory(service_id: str) -> Path:
     Returns:
         Path to the service directory
     """
-    service_dir = Path("./rag_services") / service_id
+    service_dir = Path("rag_services") / service_id
     service_dir.mkdir(parents=True, exist_ok=True)
+    
+    docs_dir = service_dir / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    
     return service_dir
 
 
-def generate_model_definition(github_url: str, service_dir: Path) -> Optional[str]:
+def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Path]:
     """
     Generate a model definition YAML file for the RAG service.
     
@@ -113,52 +98,69 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[st
         Path to the generated model definition file, or None if generation failed
     """
     try:
-        # Parse GitHub URL to extract components for the filename
-        pattern = r"https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
-        match = re.match(pattern, github_url)
-        if not match:
-            logger.error(f"Could not parse GitHub URL: {github_url}")
-            return None
+        github_info = parse_github_url(github_url)
+        service_id = service_dir.name
         
-        owner, repo = match.group(1), match.group(2)
-        path = match.group(4)  # This will be None if path is not specified
+        # Create model definition file
+        model_def_path = service_dir / f"rag-{service_id}.yml"
         
-        # Generate docs name for the filename
-        base_name = f"{owner}-{repo}".lower()
-        if path:
-            # Replace slashes with hyphens and remove any special characters
-            path_part = re.sub(r'[^a-zA-Z0-9-]', '', path.replace('/', '-'))
-            docs_name = f"{base_name}-{path_part}"
-        else:
-            docs_name = base_name
+        repo_name = github_info.repo
+        repo_title = repo_name.replace("-", " ").replace("_", " ").title()
         
-        # Create the file path
-        model_def_path = service_dir / f"model-definition-{docs_name}.yaml"
-        
-        # Create the model definition content
-        model_def_content = f"""models:
-  - name: "RAG Service - {repo}"
-    model_path: "/models/RAGModelService"
-    service:
-      pre_start_actions:
-        - action: run_command
-          args:
-            command: ["/bin/bash", "/models/RAGModelService/auto_rag_service/setup.sh"]
-      start_command: ["/bin/bash", "/models/RAGModelService/auto_rag_service/start.sh"]
-      port: 8000
+        # Create model definition YAML
+        model_def = f"""
+# Model Definition for RAG Service: {repo_title}
+model:
+  name: rag-{service_id}
+  version: 0.1.0
+  description: RAG Service for {repo_title} Documentation
+  type: inference
+  vendor: ai
+  labels:
+    source: {github_info.owner}/{github_info.repo}
+    branch: {github_info.branch}
+    service_id: {service_id}
+    created_time: {time.strftime("%Y-%m-%d %H:%M:%S")}
+    
+# Runtime configuration
+runtime:
+  type: python
+  path: /opt/rag/
+  command:
+    - ./start.sh
+  gpu:
+    min: 0
+    max: 0
+  memory:
+    min: 1g
+    max: 4g
+    
+# Service configuration
+service:
+  ports:
+    - name: gradio
+      protocol: http
+      port: 7860
+  models:
+    - path: /{service_id}
 """
-        # Write the model definition to file
-        with open(model_def_path, "w") as f:
-            f.write(model_def_content)
         
-        logger.info(f"Model definition written to {model_def_path}")
-        return str(model_def_path)
+        # Write model definition to file
+        with open(model_def_path, "w") as f:
+            f.write(model_def)
+            
+        print(f"Generated model definition: {model_def_path}")
+        logger.info("Generated model definition", path=str(model_def_path))
+        
+        return model_def_path
         
     except Exception as e:
-        logger.error(f"Error generating model definition: {e}")
+        logger.error("Error generating model definition", error=str(e))
+        print(f"Error generating model definition: {str(e)}")
         return None
+                
 
-def process_github_url(github_url: str, progress_callback: Optional[callable] = None) -> Dict:
+async def process_github_url(github_url: str, progress_callback: Optional[callable] = None) -> Dict[str, Any]:
     """
     Process a GitHub URL to create a RAG service using Backend.AI.
     
@@ -170,197 +172,256 @@ def process_github_url(github_url: str, progress_callback: Optional[callable] = 
         Service information dictionary
     """
     try:
-        # Generate service ID and create unique service name
+        # Setup environment
+        setup_environment()
+        
+        # Generate unique service ID
         service_id = get_unique_service_id()
-        service_name = f"rag_service_{service_id}"
         
         # Create service directory
         service_dir = create_service_directory(service_id)
         docs_dir = service_dir / "docs"
         indices_dir = service_dir / "indices"
+        indices_dir.mkdir(exist_ok=True)
         
-        # Initialize service information
+        # Initialize service info
         service_info = {
             "id": service_id,
             "github_url": github_url,
-            "service_name": service_name,
-            "status": ServiceStatus.PENDING,
-            "message": "Initializing service...",
             "service_dir": service_dir,
             "docs_dir": docs_dir,
             "indices_dir": indices_dir,
+            "status": ServiceStatus.PROCESSING,
+            "url": None,
+            "port": None,
+            "pid": None,
+            "model_def_path": None,
+            "error": None,
         }
         
-        # Add to services dictionary
+        # Store service info in global state
         SERVICES[service_id] = service_info
         
-        # Update status
-        service_info["status"] = ServiceStatus.PROCESSING
-        service_info["message"] = "Processing GitHub repository..."
-        
+        # Report progress
         if progress_callback:
-            progress_callback(0.2, "Cloning repository...")
+            progress_callback(0.1, f"Created service directory: {service_dir}")
+            
+        # Process GitHub URL
+        document_processor = DocumentProcessor()
         
-        # Run setup_rag.py to clone repository and create vector indices
-        setup_cmd = [
-            sys.executable,
-            "auto_rag_service/setup_rag.py",
-            "--github-url", github_url,
-            "--output-dir", str(docs_dir),
-            "--indices-path", str(indices_dir),
-            "--skip-testing",  # Skip testing to speed up the process
-        ]
-        
-        # Run the command and capture output
-        setup_process = subprocess.run(
-            setup_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
+        # Report progress
+        if progress_callback:
+            progress_callback(0.2, "Cloning GitHub repository...")
+            
+        # Clone GitHub repository
+        docs_path, error = await document_processor.clone_github_repository(
+            github_url=github_url,
+            target_dir=docs_dir
         )
         
+        if error:
+            service_info["status"] = ServiceStatus.ERROR
+            service_info["error"] = f"Failed to clone repository: {error}"
+            logger.error("Failed to clone repository", error=str(error))
+            return service_info
+            
+        # Report progress
         if progress_callback:
-            progress_callback(0.6, "Creating vector embeddings...")
+            progress_callback(0.4, "Repository cloned successfully")
+            
+        # Initialize vector store
+        vector_store = VectorStore(docs_path, indices_dir)
         
-        service_info["message"] = "Vector embeddings created successfully."
-        
-        # Generate model definition YAML
+        # Report progress
         if progress_callback:
-            progress_callback(0.8, "Generating model definition...")
-        
+            progress_callback(0.5, "Processing documentation...")
+            
+        # Process documents and create index
+        try:
+            docs = await document_processor.collect_documents(docs_path)
+            if not docs:
+                service_info["status"] = ServiceStatus.ERROR
+                service_info["error"] = "No documents found in repository"
+                logger.error("No documents found in repository")
+                return service_info
+                
+            # Report progress
+            if progress_callback:
+                progress_callback(0.7, f"Found {len(docs)} documents, creating vector index...")
+                
+            # Create index
+            await vector_store.create_indices(docs)
+            
+            # Report progress
+            if progress_callback:
+                progress_callback(0.8, "Vector index created successfully")
+                
+        except Exception as e:
+            service_info["status"] = ServiceStatus.ERROR
+            service_info["error"] = f"Failed to process documents: {str(e)}"
+            logger.error("Failed to process documents", error=str(e))
+            return service_info
+            
+        # Generate model definition
         model_def_path = generate_model_definition(github_url, service_dir)
         if model_def_path:
-            service_info["model_definition_path"] = model_def_path
-            service_info["message"] = "Model definition generated successfully."
-        
-        # Update status
-        service_info["status"] = ServiceStatus.READY
-        service_info["message"] = "Service is ready! Launching Backend.AI model service..."
-        
-        # Save service info to file for persistence
-        with open(service_dir / "service_info.txt", "w") as f:
-            for key, value in service_info.items():
-                if key not in ["service_dir", "docs_dir", "indices_dir"]:
-                    f.write(f"{key}: {value}\n")
-        
-        # Start the service in a separate thread
-        threading.Thread(
-            target=start_service,
-            args=(service_id,),
-            daemon=True
-        ).start()
-        
+            service_info["model_def_path"] = str(model_def_path)
+            
+        # Report progress
         if progress_callback:
-            progress_callback(1.0, "Service is ready!")
+            progress_callback(0.9, "Preparing service...")
+            
+        # Create start.sh script
+        create_start_script(service_id, service_dir)
         
+        # Update service status
+        service_info["status"] = ServiceStatus.READY
+        
+        # Report progress
+        if progress_callback:
+            progress_callback(1.0, "Service ready to start")
+            
         return service_info
         
     except Exception as e:
-        logger.error(f"Error processing GitHub URL: {e}")
-        service_info = {
-            "id": service_id if 'service_id' in locals() else get_unique_service_id(),
-            "github_url": github_url,
+        logger.error("Error processing GitHub URL", error=str(e))
+        return {
+            "id": service_id if 'service_id' in locals() else str(uuid.uuid4()),
             "status": ServiceStatus.ERROR,
-            "message": f"Error creating service: {str(e)}",
+            "error": str(e)
         }
-        SERVICES[service_info["id"]] = service_info
-        
-        if progress_callback:
-            progress_callback(1.0, f"Error: {str(e)}")
-        
-        return service_info
 
 
-def start_service(service_id: str) -> None:
+def create_start_script(service_id: str, service_dir: Path) -> None:
+    """Create start.sh script for the service"""
+    start_script = service_dir / "start.sh"
+    
+    script_content = f"""#!/bin/bash
+# Start script for RAG Service {service_id}
+
+# Set environment variables
+export RAG_SERVICE_PATH="{service_id}"
+
+# Start the Gradio server
+python -m interfaces.cli_app.launch_gradio \\
+    --indices-path ./${{RAG_SERVICE_PATH}}/indices \\
+    --docs-path ./${{RAG_SERVICE_PATH}}/docs \\
+    --port 7860 \\
+    --host 0.0.0.0
+"""
+    
+    with open(start_script, "w") as f:
+        f.write(script_content)
+        
+    # Make the script executable
+    start_script.chmod(0o755)
+
+
+async def start_service(service_id: str) -> Dict[str, Any]:
     """
     Start a RAG service as a Backend.AI model service.
     
     Args:
         service_id: Service ID
+        
+    Returns:
+        Updated service information
     """
-    if service_id not in SERVICES:
-        logger.error(f"Service {service_id} not found")
-        return
-    
-    service = SERVICES[service_id]
-    github_url = service["github_url"]
     try:
-        # Extract repository organization and name from GitHub URL
-        match = re.match(r'https?://github\.com/([^/]+)/([^/]+)', github_url)
-        if match:
-            repo_org = match.group(1)
-            repo_name = match.group(2)
-            if "." in repo_name:
-                repo_name = repo_name.split(".")[0]
+        if service_id not in SERVICES:
+            return {
+                "status": ServiceStatus.ERROR,
+                "error": f"Service not found: {service_id}"
+            }
+            
+        service_info = SERVICES[service_id]
+        
+        if service_info["status"] != ServiceStatus.READY:
+            return {
+                "status": service_info["status"],
+                "error": "Service is not ready to start"
+            }
+            
+        # Find available port
+        port = find_available_port()
+        service_info["port"] = port
+        
+        # Start service in background thread
+        def start_service_thread():
+            try:
+                service_dir = Path(service_info["service_dir"])
+                docs_dir = Path(service_info["docs_dir"])
+                indices_dir = Path(service_info["indices_dir"])
                 
-            service_name = f"rag_{repo_name}"
-        else:
-            # Fallback if URL doesn't match expected pattern
-            repo_name = github_url.split("/")[-1]
-            if "." in repo_name:
-                repo_name = repo_name.split(".")[0]
-            service_name = f"rag_service"
+                cmd = [
+                    "python", "-m", "interfaces.cli_app.launch_gradio",
+                    "--indices-path", str(indices_dir),
+                    "--docs-path", str(docs_dir),
+                    "--port", str(port),
+                    "--host", "0.0.0.0"
+                ]
+                
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=project_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                service_info["pid"] = process.pid
+                service_info["url"] = f"http://localhost:{port}"
+                service_info["status"] = ServiceStatus.PROCESSING
+                
+                print(f"Service started: {service_info['url']}")
+                logger.info(
+                    "Service started", 
+                    pid=process.pid, 
+                    url=service_info['url']
+                )
+                
+                # Wait for process to finish
+                stdout, stderr = process.communicate()
+                
+                if process.returncode != 0:
+                    logger.error(
+                        "Service exited with error",
+                        returncode=process.returncode,
+                        stderr=stderr
+                    )
+                    service_info["status"] = ServiceStatus.ERROR
+                    service_info["error"] = stderr
+                else:
+                    logger.info("Service exited normally")
+                    service_info["status"] = ServiceStatus.READY
+                    
+            except Exception as e:
+                logger.error("Error starting service", error=str(e))
+                service_info["status"] = ServiceStatus.ERROR
+                service_info["error"] = str(e)
         
-        # Get model definition path
-        model_def_path = service.get("model_definition_path")
-        if not model_def_path:
-            raise ValueError("Model definition path not found in service info")
+        # Start thread
+        thread = threading.Thread(target=start_service_thread)
+        thread.daemon = True
+        thread.start()
         
-        # Extract repository name for environment variable
-        repo_name = github_url.split("/")[-1]
-        if "." in repo_name:
-            repo_name = repo_name.split(".")[0]
-        
-        # Create Backend.AI model service with environment variables
-        create_service_cmd = [
-            "backend.ai", "service", "create",
-            "cr.backend.ai/testing/ngc-pytorch:24.12-pytorch2.6-py312-cuda12.6",
-            "auto_rag",
-            "1",
-            "--name", service_name,
-            "--tag", "rag_model_service",
-            "--scaling-group", "nvidia-H100",
-            "--model-definition-path", f"RAGModelService/{model_def_path}",
-            "--public",
-            "-e", f"RAG_SERVICE_NAME={service_name}",
-            "-e", f"RAG_SERVICE_PATH={service['service_dir']}",
-            "-r", "cuda.shares=0",
-            "-r", "mem=4g",
-            "-r", "cpu=2"
-        ]
-        # Run the command
-        create_result = subprocess.run(
-            create_service_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # Extract service endpoint and update service info
-        for line in create_result.stdout.split('\n'):
-            if "Service endpoint" in line:
-                service_url = line.split("Service endpoint:")[1].strip()
-                service["url"] = service_url
+        # Wait for service to start
+        for _ in range(10):
+            if service_info["status"] == ServiceStatus.PROCESSING:
                 break
-        
-        # If we couldn't extract the URL, build a default one
-        if "url" not in service:
-            # This is a placeholder - actual URL format may vary
-            service["url"] = f"https://service.backend.ai/services/{service_name}"
-        
-        logger.info(f"Service {service_id} started with URL {service['url']}")
-        
-        # Update status
-        service["status"] = ServiceStatus.READY
-        service["message"] = f"Service is ready at {service['url']}"
+            await asyncio.sleep(0.5)
+            
+        return service_info
         
     except Exception as e:
-        logger.error(f"Error starting service {service_id}: {e}")
-        service["status"] = ServiceStatus.ERROR
-        service["message"] = f"Error starting service: {str(e)}"
+        logger.error("Error starting service", error=str(e))
+        return {
+            "status": ServiceStatus.ERROR,
+            "error": str(e)
+        }
 
-def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
+
+async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
     """
     Create a RAG service from a GitHub URL (Gradio interface function).
     
@@ -371,139 +432,212 @@ def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, st
     Returns:
         Tuple of (status, message, url, model_definition_path) for the Gradio interface
     """
-    # Validate GitHub URL
-    if not validate_github_url(github_url):
+    try:
+        # Validate GitHub URL
+        if not validate_github_url(github_url):
+            return "Error", "Invalid GitHub URL", "", ""
+            
+        # Process GitHub URL with progress tracking
+        def update_progress(progress_value, description):
+            progress(progress_value, description)
+            
+        # Create progress steps for better visualization
+        progress_steps = [
+            (0.1, "Creating service directory..."),
+            (0.2, "Cloning GitHub repository..."),
+            (0.4, "Repository cloned successfully"),
+            (0.5, "Processing documentation..."),
+            (0.7, "Creating vector index..."),
+            (0.8, "Vector index created successfully"),
+            (0.9, "Preparing service..."),
+            (1.0, "Service ready to start")
+        ]
+        
+        # Start progress tracking
+        progress(0.0, "Starting RAG service creation...")
+        
+        # Process GitHub URL
+        service_info = await process_github_url(github_url, update_progress)
+        
+        if service_info["status"] == ServiceStatus.ERROR:
+            return "Error", f"Failed to create service: {service_info.get('error', 'Unknown error')}", "", ""
+            
+        # Start service
+        progress(0.95, "Starting service...")
+        service_info = await start_service(service_info["id"])
+        
+        if service_info["status"] == ServiceStatus.ERROR:
+            return "Error", f"Failed to start service: {service_info.get('error', 'Unknown error')}", "", ""
+            
+        # Return success
+        progress(1.0, "Service started successfully!")
+        model_def_path = service_info.get("model_def_path", "")
+        service_id = service_info["id"]
+        service_url = service_info["url"]
+        
         return (
-            ServiceStatus.ERROR,
-            "Invalid GitHub URL. Please enter a valid GitHub repository URL.",
-            "",
-            ""
+            "Success ", 
+            f"RAG Service created and started. Service ID: {service_id}", 
+            service_url, 
+            model_def_path
         )
-    
-    # Process GitHub URL with progress updates
-    service_info = process_github_url(
-        github_url,
-        lambda fraction, message: progress(fraction, desc=message)
-    )
-    
-    # Return relevant information for the interface as separate values
-    return (
-        service_info["status"],
-        service_info["message"],
-        service_info.get("url", ""),
-        service_info.get("model_definition_path", "")
-    )
+        
+    except Exception as e:
+        logger.error("Error creating RAG service", error=str(e))
+        return "Error", f"Error: {str(e)}", "", ""
 
 
 def create_interface() -> gr.Blocks:
     """Create the Gradio interface"""
-    with gr.Blocks(title="RAG Service Creator") as interface:
-        gr.Markdown("# RAG Service Creator")
+    # Configure blocks with queue enabled for progress tracking
+    blocks = gr.Blocks(
+        title="RAG Service Creator", 
+        analytics_enabled=False,
+    )
+    
+    # Enable queueing explicitly for the blocks instance
+    blocks.queue()
+    
+    with blocks as interface:
         gr.Markdown(
             """
-            Create a Retrieval-Augmented Generation (RAG) service from any GitHub repository 
-            containing documentation. Simply enter the GitHub URL, and we'll create a service 
-            that allows you to query the documentation using natural language.
+            # RAG Service Creator
+            
+            Create a RAG (Retrieval-Augmented Generation) service from a GitHub repository containing documentation.
+            
+            ## Instructions
+            
+            1. Enter a GitHub URL containing documentation
+            2. Click 'Create RAG Service'
+            3. Wait for the service to be created
+            4. Open the service URL to use the RAG Chatbot
+            
+            ## Examples
+            
+            - https://github.com/langchain-ai/langchain
+            - https://github.com/NVIDIA/TensorRT-LLM
+            - https://github.com/labmlai/annotated_deep_learning_paper_implementations
             """
         )
         
         with gr.Row():
             github_url = gr.Textbox(
-                label="GitHub Repository URL",
-                placeholder="https://github.com/owner/repo",
-                info="Enter a GitHub repository URL containing documentation (markdown files)",
+                label="GitHub URL",
+                placeholder="Enter GitHub repository URL (e.g., https://github.com/owner/repo)",
             )
-        
-        with gr.Row():
             create_button = gr.Button("Create RAG Service", variant="primary")
-        
+            
         with gr.Row():
-            with gr.Column():
-                status = gr.Textbox(label="Status", interactive=False)
-                message = gr.Textbox(label="Message", interactive=False)
-                service_url = gr.Textbox(
-                    label="Service URL", 
-                    interactive=False,
-                    info="Click this link to access your RAG service when ready"
-                )
-                model_definition_path = gr.Textbox(
-                    label="Model Definition Path",
-                    interactive=False,
-                    info="Path to the generated model definition YAML file for Backend.AI"
-                )
-        
+            status = gr.Textbox(
+                label="Status", 
+                value="Ready to create service", 
+                interactive=False
+            )
+            
         with gr.Row():
-            gr.Markdown("### Example Repositories:")
-        
+            message = gr.Textbox(
+                label="Message",
+                value="Enter a GitHub URL and click 'Create RAG Service'",
+                interactive=False,
+                lines=2
+            )
+            
         with gr.Row():
-            pytorch_btn = gr.Button("PyTorch")
-            typescript_btn = gr.Button("TypeScript")
-            pandas_btn = gr.Button("Pandas")
-            fastai_btn = gr.Button("FastAI")
-        
-        # Set up click handlers for example buttons
-        pytorch_btn.click(fn=lambda: "https://github.com/pytorch/pytorch", outputs=github_url)
-        typescript_btn.click(fn=lambda: "https://github.com/microsoft/TypeScript", outputs=github_url)
-        pandas_btn.click(fn=lambda: "https://github.com/pandas-dev/pandas", outputs=github_url)
-        fastai_btn.click(fn=lambda: "https://github.com/fastai/fastai", outputs=github_url)
-        
-        # Handle form submission
+            service_url = gr.Textbox(
+                label="Service URL",
+                value="",
+                interactive=False,
+            )
+            open_button = gr.Button("Open Service")
+            
+        with gr.Row():
+            model_def_path = gr.Textbox(
+                label="Model Definition Path",
+                value="",
+                interactive=False,
+            )
+            
+        # Button click event
         create_button.click(
-            fn=create_rag_service,
+            create_rag_service,
             inputs=[github_url],
-            outputs=[
-                status,
-                message,
-                service_url,
-                model_definition_path,
-            ],
+            outputs=[status, message, service_url, model_def_path],
         )
         
-        # Add help information
-        with gr.Accordion("Help & Information", open=False):
-            gr.Markdown(
-                """
-                ## How it works
-                
-                1. Enter a GitHub repository URL containing documentation
-                2. We'll clone the repository and create vector embeddings using OpenAI's embeddings API
-                3. A Gradio interface will be launched for querying the documentation
-                4. A model definition YAML file will be generated for Backend.AI model service creation
-                5. You'll receive a link to access the service when it's ready
-                
-                ## Tips
-                
-                - The repository should contain markdown (.md) files
-                - For better results, specify a path to the documentation directory, e.g., `https://github.com/owner/repo/tree/main/docs`
-                - The service will remain active as long as this portal is running
-                - Each service runs on a different port to avoid conflicts
-                - The generated model definition can be used to create a Backend.AI model service
-                """
-            )
-    
+        # Open service button
+        def open_service(url):
+            import webbrowser
+            if url:
+                webbrowser.open(url)
+                return f"Opening {url}..."
+            return "No service URL to open"
+            
+        open_button.click(
+            open_service,
+            inputs=[service_url],
+            outputs=[message],
+        )
+        
+        # Example buttons
+        with gr.Row():
+            gr.Markdown("### Example Repositories")
+            
+        with gr.Row():
+            example_1 = gr.Button("LangChain")
+            example_2 = gr.Button("TensorRT-LLM")
+            example_3 = gr.Button("Annotated Deep Learning")
+            
+        example_1.click(
+            lambda: "https://github.com/langchain-ai/langchain",
+            outputs=[github_url],
+        )
+        example_2.click(
+            lambda: "https://github.com/NVIDIA/TensorRT-LLM",
+            outputs=[github_url],
+        )
+        example_3.click(
+            lambda: "https://github.com/labmlai/annotated_deep_learning_paper_implementations",
+            outputs=[github_url],
+        )
+        
     return interface
 
 
-def main():
-    """Main function"""
-    # Setup environment
-    load_dotenv()
+async def main() -> int:
+    """
+    Main function.
     
-    # Check for OpenAI API key
-    openai_api_key = os.environ.get("OPENAI_API_KEY")
-    if not openai_api_key:
-        print("Error: OpenAI API key is required. Please set the OPENAI_API_KEY environment variable.")
-        print("You can create a .env file with the following content:")
-        print("OPENAI_API_KEY=your_api_key_here")
+    Returns:
+        Exit code
+    """
+    try:
+        # Setup environment
+        if not setup_environment():
+            logger.error("Failed to set up environment")
+            print("Error: Failed to set up environment")
+            return 1
+            
+        interface = create_interface()
+        
+        print("Launching Gradio server for RAG Service Creator...")
+        print("URL: http://localhost:7861")
+        
+        # Launch server with settings to keep the app running
+        interface.launch(
+            server_name="0.0.0.0",
+            server_port=7861,
+            share=False,
+            debug=False,
+            prevent_thread_lock=False  # Keep the main thread locked to prevent exit
+        )
+        
+        return 0
+        
+    except Exception as e:
+        logger.error("Error in main function", error=str(e))
+        print(f"Error: {str(e)}")
         return 1
-    
-    # Create and launch the interface
-    interface = create_interface()
-    interface.queue()  # Enable queuing
-    interface.launch(server_name="0.0.0.0", server_port=8000, share=True)
-    
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    asyncio.run(main())

@@ -5,9 +5,6 @@ cd /models/RAGModelService
 pip install -e .
 pip install gradio==5.23.1
 
-pip install backend.ai-client==25.4.0 &
-
-
 source /models/RAGModelService/.env
 
 echo "" >> ~/.bashrc

@@ -5,8 +5,8 @@ models:
       pre_start_actions:
         - action: run_command
           args:
-            command: ["/bin/bash", "/models/RAGModelService/setup_portal.sh"]
+            command: ["/bin/bash", "/models/RAGModelService/deployment/scripts/setup_portal.sh"]
       start_command:
         - /bin/bash
-        - /models/RAGModelService/start_portal.sh
+        - /models/RAGModelService/deployment/scripts/start_portal.sh
       port: 8000

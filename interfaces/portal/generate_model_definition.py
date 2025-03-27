@@ -199,27 +199,51 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
     # Determine the docs path argument
     docs_path_arg = path if path else ""
     
+    # Determine the start command based on service type
+    if service_type == 'gradio':
+        start_command = [
+            'python3',
+            '/models/RAGModelService/interfaces/gradio_app/gradio_app.py',
+            '--indices-path',
+            f'/models/RAGModelService/rag_services/{owner}/{repo}/indices',
+            '--docs-path',
+            f'/models/RAGModelService/rag_services/{owner}/{repo}/docs',
+            '--host',
+            '0.0.0.0',
+            '--port',
+            str(port)
+        ]
+    else:  # fastapi
+        start_command = [
+            'python3',
+            '/models/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
+            '--indices-path',
+            f'/models/RAGModelService/rag_services/{owner}/{repo}/indices',
+            '--docs-path',
+            f'/models/RAGModelService/rag_services/{owner}/{repo}/docs',
+            '--host',
+            '0.0.0.0',
+            '--port',
+            str(port)
+        ]
+    
     # Create the model definition
     model_definition = {
-        "models": [
+        'models': [
             {
-                "name": model_name,
-                "model_path": "/models",
-                "service": {
-                    "pre_start_actions": [
-                        "/bin/bash",
-                        "/models/RAGModelService/auto_rag_service/setup.sh",
-                        github_url
+                'name': model_name,
+                'model_path': '/models',
+                'service': {
+                    'pre_start_actions': [
+                        {
+                            'action': 'run_command',
+                            'args': {
+                                'command': ['/bin/bash', '/models/RAGModelService/setup.sh']
+                            }
+                        }
                     ],
-                    "start_command": [
-                        "/bin/bash",
-                        "/models/RAGModelService/auto_rag_service/start.sh",
-                        docs_path_arg
-                    ],
-                    "docs_path_arg": docs_path_arg,
-                    "port": port,
-                    "repo_owner": owner,
-                    "repo_name": repo
+                    'start_command': start_command,
+                    'port': port
                 }
             }
         ]

@@ -6,15 +6,20 @@ This module provides functionality for:
 1. Parsing GitHub repository URLs
 2. Cloning GitHub repositories
 3. Preparing documentation for RAG processing
+
+Note: This module now delegates to utils.github_utils for core GitHub functionality.
 """
 
 import os
-import re
-import subprocess
+import asyncio
 from pathlib import Path
 from typing import Tuple, Optional
 
 import structlog
+
+# Import centralized GitHub utilities
+from utils.github_utils import parse_github_url as utils_parse_github_url
+from utils.github_utils import clone_github_repo as utils_clone_github_repo
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -30,27 +35,9 @@ def parse_github_url(github_url: str) -> Tuple[str, str, str, str]:
     Returns:
         Tuple containing owner, repo, branch, and path
     """
-    # Handle different GitHub URL formats
-    # https://github.com/owner/repo
-    # https://github.com/owner/repo/tree/branch
-    # https://github.com/owner/repo/tree/branch/path/to/docs
-    
-    # Remove any trailing slashes
-    github_url = github_url.rstrip('/')
-    
-    # Basic URL pattern for GitHub
-    basic_pattern = r"https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
-    match = re.match(basic_pattern, github_url)
-    
-    if not match:
-        raise ValueError(f"Invalid GitHub URL: {github_url}")
-    
-    owner = match.group(1)
-    repo = match.group(2)
-    branch = match.group(3) or "main"  # Default to 'main' if branch is not specified
-    path = match.group(4) or ""  # Default to empty string if path is not specified
-    
-    return owner, repo, branch, path
+    # Use the centralized implementation but convert the return format
+    github_info = utils_parse_github_url(github_url)
+    return github_info.owner, github_info.repo, github_info.branch, github_info.path
 
 
 async def clone_github_repo(github_url: str, target_dir: Path) -> Path:
@@ -65,65 +52,41 @@ async def clone_github_repo(github_url: str, target_dir: Path) -> Path:
         Path to documentation directory
     """
     try:
-        # Parse GitHub URL
-        owner, repo, branch, path = parse_github_url(github_url)
+        # Parse GitHub URL using centralized utility
+        github_info = utils_parse_github_url(github_url)
         
         logger.info(
             "Parsed GitHub URL",
-            owner=owner,
-            repo=repo,
-            branch=branch,
-            path=path,
+            owner=github_info.owner,
+            repo=github_info.repo,
+            branch=github_info.branch,
+            path=github_info.path,
         )
         
         # Create target directory if it doesn't exist
         target_dir.mkdir(exist_ok=True, parents=True)
         
-        # Clone repository
-        print(f"Cloning {owner}/{repo} repository...")
+        # Clone repository using centralized utility
+        print(f"Cloning {github_info.owner}/{github_info.repo} repository...")
         
-        repo_url = f"https://github.com/{owner}/{repo}.git"
-        clone_dir = target_dir / "repo"
+        docs_path, error = utils_clone_github_repo(github_info, target_dir)
         
-        # Remove existing directory if it exists
-        if clone_dir.exists():
-            print(f"Removing existing repository at {clone_dir}...")
-            subprocess.run(["rm", "-rf", str(clone_dir)], check=True)
-        
-        # Clone repository
-        subprocess.run(
-            ["git", "clone", "--depth", "1", "-b", branch, repo_url, str(clone_dir)],
-            check=True,
-        )
-        
-        print(f"Repository cloned successfully to {clone_dir}")
-        
-        # Determine docs directory
-        if path:
-            docs_dir = clone_dir / path
-        else:
-            # Look for common documentation directories
-            common_doc_dirs = ["docs", "doc", "documentation", "wiki"]
-            for doc_dir in common_doc_dirs:
-                potential_dir = clone_dir / doc_dir
-                if potential_dir.exists() and potential_dir.is_dir():
-                    docs_dir = potential_dir
-                    break
-            else:
-                # If no common doc directory found, use the repo root
-                docs_dir = clone_dir
-        
+        if error:
+            raise error
+            
         # Create docs directory if it doesn't exist
         docs_target = target_dir / "docs"
         docs_target.mkdir(exist_ok=True, parents=True)
         
-        # Copy documentation to docs directory
-        print(f"Copying documentation from {docs_dir} to {docs_target}...")
-        subprocess.run(["cp", "-r", f"{str(docs_dir)}/.", str(docs_target)], check=True)
-        
-        print(f"Documentation copied successfully to {docs_target}")
-        
-        return docs_target
+        # If docs_path is different from docs_target, copy the contents
+        if docs_path != docs_target and docs_path.exists():
+            print(f"Copying documentation from {docs_path} to {docs_target}...")
+            # Use os.system instead of subprocess to simplify the async environment
+            os.system(f"cp -r {str(docs_path)}/. {str(docs_target)}")
+            print(f"Documentation copied successfully to {docs_target}")
+            return docs_target
+        else:
+            return docs_path
         
     except Exception as e:
         logger.error("Error cloning repository", error=str(e))
@@ -151,7 +114,6 @@ def prepare_for_rag(github_url: str, output_dir: Optional[Path] = None) -> Path:
         output_dir = Path(output_dir)
         
         # Clone repository
-        import asyncio
         docs_path = asyncio.run(clone_github_repo(github_url, output_dir))
         
         print(f"Repository prepared for RAG processing. Documentation path: {docs_path}")

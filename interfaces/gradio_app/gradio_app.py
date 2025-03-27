@@ -120,10 +120,15 @@ async def read_markdown_file(file_path: str | Path) -> str:
 
         # Define the base paths to search for assets
         base_paths = [
-            Path(DOCS_PATH) / "docs" / "source",  # github_docs/docs/source
-            Path(DOCS_PATH) / "source",           # github_docs/source
-            Path(DOCS_PATH),                      # github_docs
-            Path(DOCS_PATH).parent / "docs" / "source",  # parent/docs/source
+            Path(DOCS_PATH) / "docs" / "source",        # github_docs/docs/source
+            Path(DOCS_PATH) / "source",                 # github_docs/source
+            Path(DOCS_PATH),                            # github_docs
+            Path(DOCS_PATH).parent / "docs" / "source", # parent/docs/source
+            Path(DOCS_PATH) / "docs",                   # Added: github_docs/docs
+            # The following paths handle the actual structure with "installation" subdirectory
+            Path(DOCS_PATH) / "docs" / "source" / "installation",  # Added: docs/docs/source/installation
+            Path(DOCS_PATH) / "source" / "installation",           # Added: docs/source/installation
+            Path(DOCS_PATH) / "docs" / "source" / "reference",     # Added: docs/docs/source/reference 
         ]
 
         def find_asset_file(asset_path):
@@ -256,6 +261,28 @@ def create_gradio_interface(
         indices_path: Optional custom path to vector indices. If None, uses default from config.
     """
     
+    # IMMEDIATELY TEST read_markdown_file with a known path to verify our logs are working
+    logger.error("=================== BEGINNING MANUAL TEST OF MARKDOWN READER ===================")
+    try:
+        actual_docs_path = Path(docs_path or DOCS_PATH)
+        logger.error(f"Manual test - Docs path: {actual_docs_path}")
+        # Test with a specific file we know is causing problems
+        test_path = "source/installation/linux.md"
+        logger.error(f"Manual test - Testing with path: {test_path}")
+        # Try to find this file directly to ensure our lookup is working
+        test_direct_path = actual_docs_path / "docs" / test_path
+        logger.error(f"Manual direct path: {test_direct_path}")
+        logger.error(f"Manual direct path exists: {test_direct_path.exists()}")
+        
+        # Recursively look for linux.md to confirm if it exists anywhere
+        logger.error("Looking for linux.md anywhere in the docs path...")
+        for root, dirs, files in os.walk(actual_docs_path):
+            if "linux.md" in files:
+                logger.error(f"FOUND linux.md at: {Path(root) / 'linux.md'}")
+    except Exception as e:
+        logger.error(f"Manual test FAILED with error: {e}")
+    logger.error("=================== END MANUAL TEST ===================")
+    
     # Use custom docs_path if provided, otherwise use default from config
     actual_docs_path = docs_path if docs_path is not None else Path(DOCS_PATH)
     logger.info(f"Using documentation path: {actual_docs_path}")
@@ -268,18 +295,64 @@ def create_gradio_interface(
     async def custom_read_markdown_file(file_path: str | Path) -> str:
         """Read markdown file with custom docs path"""
         try:
+            # Convert to Path if it's a string
             file_path = Path(file_path)
             logger.info(f"Attempting to read file: {file_path}")
-            logger.info(f"File exists: {file_path.exists()}")
-            logger.info(f"File is file: {file_path.is_file()}")
-            logger.info(f"File absolute path: {file_path.absolute()}")
-
+            
+            # First check if the file exists as provided
             if not file_path.exists():
-                error_msg = f"File not found: {file_path}"
+                # Build a list of possible paths to try, accounting for various nested structures
+                possible_paths = [
+                    actual_docs_path / file_path,                  # direct path
+                    actual_docs_path / "docs" / file_path,         # with one docs directory
+                    actual_docs_path / "docs" / "docs" / file_path, # with double docs directory
+                ]
+                
+                # For paths like 'source/installation/linux.md', try both with and without prepending 'docs/'
+                if str(file_path).startswith(("source/", "source\\")):
+                    source_path = file_path
+                    # Remove 'source/' prefix to try direct path to file
+                    non_source_path = Path(str(file_path).replace("source/", "").replace("source\\", ""))
+                    
+                    # Add additional path combinations
+                    possible_paths.extend([
+                        actual_docs_path / "docs" / "source" / non_source_path,
+                        actual_docs_path / "docs" / "docs" / "source" / non_source_path,
+                        actual_docs_path / "source" / non_source_path,
+                        # Try the full path including 'source' but with different base directories
+                        actual_docs_path / "docs" / source_path,
+                        actual_docs_path / "docs" / "docs" / source_path
+                    ])
+                
+                # Try each possible path
+                for possible_path in possible_paths:
+                    logger.info(f"Trying path: {possible_path}")
+                    if possible_path.exists() and possible_path.is_file():
+                        logger.info(f"Found file at: {possible_path}")
+                        file_path = possible_path
+                        break
+            
+            # If still not found, try a last resort recursive search
+            if not file_path.exists():
+                file_name = file_path.name
+                logger.info(f"File not found in standard locations. Searching recursively for: {file_name}")
+                
+                # Recursively search for the file by name
+                for root, dirs, files in os.walk(actual_docs_path):
+                    if file_name in files:
+                        found_path = Path(root) / file_name
+                        logger.info(f"Found file by name at: {found_path}")
+                        file_path = found_path
+                        break
+            
+            # Final check - if still not found
+            if not file_path.exists():
+                error_msg = f"File not found in any location: {file_path}"
                 logger.error(error_msg)
                 return f"Error: {error_msg}"
 
-            logger.info(f"File exists, reading content...")
+            # Read the file
+            logger.info(f"Reading file: {file_path}")
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
 
@@ -321,10 +394,15 @@ def create_gradio_interface(
 
             # Define the base paths to search for assets
             base_paths = [
-                actual_docs_path / "docs" / "source",  # github_docs/docs/source
-                actual_docs_path / "source",           # github_docs/source
-                actual_docs_path,                      # github_docs
-                actual_docs_path.parent / "docs" / "source",  # parent/docs/source
+                actual_docs_path / "docs" / "source",        # github_docs/docs/source
+                actual_docs_path / "source",                 # github_docs/source
+                actual_docs_path,                            # github_docs
+                actual_docs_path.parent / "docs" / "source", # parent/docs/source
+                actual_docs_path / "docs",                   # Added: github_docs/docs
+                # The following paths handle the actual structure with "installation" subdirectory
+                actual_docs_path / "docs" / "source" / "installation",  # Added: docs/docs/source/installation
+                actual_docs_path / "source" / "installation",           # Added: docs/source/installation
+                actual_docs_path / "docs" / "source" / "reference",     # Added: docs/docs/source/reference 
             ]
 
             def find_asset_file(asset_path):
@@ -351,7 +429,7 @@ def create_gradio_interface(
                             full_path = Path(root) / asset_filename
                             logger.info(f"Found asset by filename at: {full_path}")
                             return full_path
-                
+            
                 # If it's a relative path
                 else:
                     # First try relative to the current file
@@ -360,7 +438,7 @@ def create_gradio_interface(
                     if rel_path.exists():
                         logger.info(f"Found asset at: {rel_path}")
                         return rel_path
-                
+            
                 # Asset not found
                 logger.warning(f"Asset not found: {asset_path}")
                 return None
@@ -497,16 +575,26 @@ def create_gradio_interface(
                 # Try different path combinations to find the document
                 possible_paths = [
                     actual_docs_path / relative_path,  # Original path
-                    actual_docs_path / "source" / relative_path,  # Try with source prefix
-                    Path(str(actual_docs_path).replace("/docs", "")) / relative_path,  # Try without docs
-                    # Try with docs/source prefix for paths that start with source/
-                    actual_docs_path / relative_path.replace("source/", "", 1) if relative_path.startswith("source/") else Path(""),
-                    # Try the exact path that exists for tpu.inc.md
-                    Path("/Users/sergeyleksikov/Documents/GitHub/RAGModelService/github_docs/docs/source") / relative_path.replace("source/", "", 1) if relative_path.startswith("source/") else Path(""),
-                    # Try with just the filename
-                    actual_docs_path / Path(relative_path).name,
-                    actual_docs_path / "source" / Path(relative_path).name,
+                    actual_docs_path / "docs" / relative_path,  # Try with docs prefix
+                    actual_docs_path / "docs" / "docs" / relative_path,  # Try with double docs prefix
                 ]
+                
+                # For paths like "source/installation/linux.md"
+                if str(relative_path).startswith(("source/", "source\\")):
+                    # For paths like "source/installation/linux.md"
+                    source_path = relative_path
+                    # Remove 'source/' prefix to try direct path to file
+                    non_source_path = Path(str(relative_path).replace("source/", "").replace("source\\", ""))
+                    
+                    # Add additional path combinations
+                    possible_paths.extend([
+                        actual_docs_path / "docs" / "source" / non_source_path,
+                        actual_docs_path / "docs" / "docs" / "source" / non_source_path,
+                        actual_docs_path / "source" / non_source_path,
+                        # Try the full path including 'source' but with different base directories
+                        actual_docs_path / "docs" / source_path,
+                        actual_docs_path / "docs" / "docs" / source_path
+                    ])
                 
                 full_path = None
                 for path in possible_paths:

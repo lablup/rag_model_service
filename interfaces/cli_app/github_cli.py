@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import sys
+import asyncio
 from pathlib import Path
 
 import structlog
@@ -24,7 +25,11 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
+# Import from portal.github for backward compatibility
 from interfaces.portal.github import parse_github_url, prepare_for_rag
+
+# Import centralized GitHub utilities for direct access when needed
+from utils.github_utils import GitHubInfo
 
 # Initialize logger and console
 logger = structlog.get_logger()
