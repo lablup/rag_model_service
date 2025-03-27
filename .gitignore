@@ -19,3 +19,5 @@ bai_manager/*
 .env
 .python-version
 .env
+rag_services/*
+
