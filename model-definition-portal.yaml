@@ -1,12 +1,13 @@
 models:
   - name: "TensroRT-LLM RAG Portal"
-    model_path: "/Users/sergeyleksikov/Documents/GitHub/RAGModelService"
+    model_path: "/models"
     service:
       pre_start_actions:
         - action: run_command
           args:
             command: ["/bin/bash", "/models/RAGModelService/setup_portal.sh"]
       start_command:
-        - python3
-        - /models/RAGModelService/auto_rag_service/rag_service_portal.py
+        - /bin/bash
+        - -c
+        - "cd /models/RAGModelService && python3 auto_rag_service/rag_service_portal.py"
       port: 8000

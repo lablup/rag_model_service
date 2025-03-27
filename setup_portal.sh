@@ -4,7 +4,9 @@ cd /models/RAGModelService
 
 pip install -e .
 
-pip install backend.ai-client==25.4.0
+# Run backend.ai-client installation in background
+pip install backend.ai-client==25.4.0 &
+
 
 source /models/RAGModelService/.env
 
