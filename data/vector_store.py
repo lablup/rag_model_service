@@ -93,20 +93,28 @@ class VectorStore:
     async def load_index(self) -> None:
         """Load the FAISS index into memory"""
         index_path = self.indices_path / self.index_name
+        self.logger.info(f"Attempting to load index from: {index_path}")
+        
         if not index_path.exists():
-            self.logger.warning("Index directory not found")
+            self.logger.warning(f"Index directory not found at: {index_path}")
+            # Check if parent directories exist
+            self.logger.info(f"Parent directory exists: {self.indices_path.exists()}")
+            # List contents of parent directory if it exists
+            if self.indices_path.exists():
+                self.logger.info(f"Contents of {self.indices_path}: {list(self.indices_path.iterdir())}")
             return
 
         try:
+            self.logger.info(f"Loading index from: {index_path}")
             self.index = FAISS.load_local(
                 str(index_path),
                 self.embeddings,
                 allow_dangerous_deserialization=True,
             )
-            self.logger.info("Loaded index")
+            self.logger.info(f"Successfully loaded index from: {index_path}")
         except Exception as e:
             self.logger.error(
-                "Failed to load index", error=str(e)
+                "Failed to load index", error=str(e), path=str(index_path)
             )
 
     async def search_documents(
@@ -122,14 +130,20 @@ class VectorStore:
         Returns:
             List of document dictionaries with content, metadata, and similarity score
         """
+        self.logger.info(f"Searching for query: '{query}'")
+        
         if not self.index:
+            self.logger.info("Index not loaded, attempting to load it now")
             await self.load_index()
             
         if not self.index:
+            self.logger.error("Failed to load index for search", indices_path=str(self.indices_path))
             raise ValueError("No index loaded")
 
         try:
+            self.logger.info(f"Performing similarity search with k={k}")
             docs_with_scores = self.index.similarity_search_with_score(query, k=k)
+            self.logger.info(f"Search successful, found {len(docs_with_scores)} results")
             return [
                 {
                     "content": doc.page_content,
