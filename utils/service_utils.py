@@ -29,6 +29,7 @@ class ServiceStatus:
     """Service status constants"""
     PENDING = "pending"
     PROCESSING = "processing"
+    RUNNING = "running"
     READY = "ready"
     ERROR = "error"
 

@@ -26,6 +26,7 @@ import gradio as gr
 from dotenv import load_dotenv
 import structlog
 import asyncio
+import traceback
 
 # Ensure project root is in path
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -145,12 +146,17 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         
         # Generate unique service ID
         service_id = get_unique_service_id()
+        logger.info("Generated service ID", service_id=service_id)
         
         # Create service directory
         service_dir = create_service_directory(service_id)
         docs_dir = service_dir / "docs"
         indices_dir = service_dir / "indices"
         indices_dir.mkdir(exist_ok=True)
+        logger.info("Created service directories", 
+                   service_dir=str(service_dir), 
+                   docs_dir=str(docs_dir), 
+                   indices_dir=str(indices_dir))
         
         # Initialize service info
         service_info = {
@@ -166,6 +172,7 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             "model_def_path": None,
             "error": None,
         }
+        logger.info("Initialized service info", service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
         # Store service info in global state
         SERVICES[service_id] = service_info
@@ -186,11 +193,12 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             github_url=github_url,
             target_dir=docs_dir
         )
+        logger.info("Clone repository result", docs_path=str(docs_path) if docs_path else None, error=error)
         
         if error:
             service_info["status"] = ServiceStatus.ERROR
             service_info["error"] = f"Failed to clone repository: {error}"
-            logger.error("Failed to clone repository", error=str(error))
+            logger.error("Failed to clone repository", error=str(error), service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
             return service_info
             
         # Report progress
@@ -199,6 +207,7 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             
         # Initialize vector store
         vector_store = VectorStore(docs_path, indices_dir)
+        logger.info("Initialized vector store", docs_path=str(docs_path), indices_dir=str(indices_dir))
         
         # Report progress
         if progress_callback:
@@ -207,10 +216,12 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         # Process documents and create index
         try:
             docs = await document_processor.collect_documents(docs_path)
+            logger.info("Collected documents", docs_count=len(docs) if docs else 0)
+            
             if not docs:
                 service_info["status"] = ServiceStatus.ERROR
                 service_info["error"] = "No documents found in repository"
-                logger.error("No documents found in repository")
+                logger.error("No documents found in repository", service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
                 return service_info
                 
             # Report progress
@@ -219,6 +230,7 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
                 
             # Create index
             await vector_store.create_indices(docs)
+            logger.info("Created vector indices successfully")
             
             # Report progress
             if progress_callback:
@@ -227,13 +239,17 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         except Exception as e:
             service_info["status"] = ServiceStatus.ERROR
             service_info["error"] = f"Failed to process documents: {str(e)}"
-            logger.error("Failed to process documents", error=str(e))
+            logger.error("Failed to process documents", error=str(e), service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
             return service_info
             
         # Generate model definition
         model_def_path = generate_model_definition(github_url, service_dir)
+        logger.info("Generated model definition", model_def_path=str(model_def_path) if model_def_path else None)
+        
         if model_def_path:
             service_info["model_def_path"] = str(model_def_path)
+        else:
+            logger.warning("Failed to generate model definition")
             
         # Report progress
         if progress_callback:
@@ -241,9 +257,11 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             
         # Create start.sh script
         create_start_script(service_id, service_dir)
+        logger.info("Created start script", service_id=service_id, service_dir=str(service_dir))
         
         # Update service status
         service_info["status"] = ServiceStatus.READY
+        logger.info("Service ready to start", service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
         # Report progress
         if progress_callback:
@@ -252,12 +270,14 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         return service_info
         
     except Exception as e:
-        logger.error("Error processing GitHub URL", error=str(e))
-        return {
+        logger.error("Error processing GitHub URL", error=str(e), traceback=traceback.format_exc())
+        error_info = {
             "id": service_id if 'service_id' in locals() else str(uuid.uuid4()),
             "status": ServiceStatus.ERROR,
             "error": str(e)
         }
+        logger.error("Returning error info", error_info=error_info)
+        return error_info
 
 
 def create_start_script(service_id: str, service_dir: Path) -> None:
@@ -296,23 +316,35 @@ async def start_service(service_id: str) -> Dict[str, Any]:
         Updated service information
     """
     try:
+        logger.info("Starting service", service_id=service_id)
+        
         if service_id not in SERVICES:
+            error_msg = f"Service not found: {service_id}"
+            logger.error(error_msg)
             return {
                 "status": ServiceStatus.ERROR,
-                "error": f"Service not found: {service_id}"
+                "error": error_msg
             }
             
         service_info = SERVICES[service_id]
+        logger.info("Retrieved service info", 
+                   service_id=service_id, 
+                   service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
         if service_info["status"] != ServiceStatus.READY:
+            error_msg = "Service is not ready to start"
+            logger.error(error_msg, 
+                        service_id=service_id, 
+                        current_status=service_info["status"])
             return {
                 "status": service_info["status"],
-                "error": "Service is not ready to start"
+                "error": error_msg
             }
             
         # Find available port
         port = find_available_port()
         service_info["port"] = port
+        logger.info("Found available port", port=port)
         
         # Start service in background thread
         def start_service_thread():
@@ -321,6 +353,11 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 docs_dir = Path(service_info["docs_dir"])
                 indices_dir = Path(service_info["indices_dir"])
                 
+                logger.info("Starting service thread", 
+                           service_dir=str(service_dir),
+                           docs_dir=str(docs_dir),
+                           indices_dir=str(indices_dir))
+                
                 cmd = [
                     "python", "-m", "interfaces.cli_app.launch_gradio",
                     "--indices-path", str(indices_dir),
@@ -328,6 +365,8 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     "--port", str(port),
                     "--host", "0.0.0.0"
                 ]
+                
+                logger.info("Executing command", cmd=cmd, cwd=str(project_root))
                 
                 process = subprocess.Popen(
                     cmd,
@@ -341,12 +380,10 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 service_info["url"] = f"http://localhost:{port}"
                 service_info["status"] = ServiceStatus.PROCESSING
                 
-                print(f"Service started: {service_info['url']}")
-                logger.info(
-                    "Service started", 
-                    pid=process.pid, 
-                    url=service_info['url']
-                )
+                logger.info("Service process started", 
+                           pid=process.pid, 
+                           url=service_info['url'],
+                           service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
                 
                 # Wait for process to finish
                 stdout, stderr = process.communicate()
@@ -355,18 +392,27 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     logger.error(
                         "Service exited with error",
                         returncode=process.returncode,
-                        stderr=stderr
+                        stderr=stderr,
+                        stdout=stdout
                     )
                     service_info["status"] = ServiceStatus.ERROR
                     service_info["error"] = stderr
+                    logger.error("Updated service info after error", 
+                               service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
                 else:
-                    logger.info("Service exited normally")
+                    logger.info("Service exited normally", stdout=stdout)
                     service_info["status"] = ServiceStatus.READY
+                    logger.info("Updated service info after normal exit", 
+                               service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
                     
             except Exception as e:
-                logger.error("Error starting service", error=str(e))
+                logger.error("Error in service thread", 
+                            error=str(e), 
+                            traceback=traceback.format_exc())
                 service_info["status"] = ServiceStatus.ERROR
                 service_info["error"] = str(e)
+                logger.error("Updated service info after exception", 
+                           service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
         # Start thread
         thread = threading.Thread(target=start_service_thread)
@@ -374,19 +420,31 @@ async def start_service(service_id: str) -> Dict[str, Any]:
         thread.start()
         
         # Wait for service to start
-        for _ in range(10):
+        for i in range(10):
+            logger.info(f"Waiting for service to start (attempt {i+1}/10)", 
+                       service_id=service_id, 
+                       status=service_info["status"])
             if service_info["status"] == ServiceStatus.PROCESSING:
                 break
             await asyncio.sleep(0.5)
             
+        logger.info("Returning service info from start_service", 
+                   service_id=service_id, 
+                   service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         return service_info
         
     except Exception as e:
-        logger.error("Error starting service", error=str(e))
-        return {
+        logger.error("Error starting service", 
+                    error=str(e), 
+                    traceback=traceback.format_exc(), 
+                    service_id=service_id)
+        error_info = {
             "status": ServiceStatus.ERROR,
-            "error": str(e)
+            "error": str(e),
+            "id": service_id
         }
+        logger.error("Returning error info from start_service", error_info=error_info)
+        return error_info
 
 
 async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
@@ -403,8 +461,31 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
     try:
         # Validate GitHub URL
         if not validate_github_url(github_url):
-            return "Error", "Invalid GitHub URL", "", ""
+            error_msg = "Invalid GitHub URL"
+            logger.error(error_msg, 
+                        github_url=github_url,
+                        validation_result=False)
             
+            # Log the raw values being returned to the status boxes for validation error
+            logger.error("Raw validation error values for status boxes", 
+                       status_type=type("Error").__name__,
+                       status_value="Error",
+                       message_type=type(error_msg).__name__,
+                       message_value=error_msg,
+                       service_url_type=type("").__name__,
+                       service_url_value="",
+                       model_def_path_type=type("").__name__,
+                       model_def_path_value="")
+            
+            # Create validation error return tuple and log it
+            error_tuple = ("Error", error_msg, "", "")
+            logger.error("Validation error return tuple for Gradio", 
+                       return_tuple=error_tuple,
+                       tuple_type=type(error_tuple).__name__,
+                       tuple_length=len(error_tuple))
+            
+            return error_tuple
+        
         # Process GitHub URL with progress tracking
         def update_progress(progress_value, description):
             progress(progress_value, description)
@@ -426,33 +507,160 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         
         # Process GitHub URL
         service_info = await process_github_url(github_url, update_progress)
+        logger.info("Service info after processing GitHub URL", service_info=service_info)
         
-        if service_info["status"] == ServiceStatus.ERROR:
-            return "Error", f"Failed to create service: {service_info.get('error', 'Unknown error')}", "", ""
+        if service_info.get("status") == ServiceStatus.ERROR:
+            error_msg = f"Failed to create service: {service_info.get('error', 'Unknown error')}"
+            logger.error(error_msg, 
+                        service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()},
+                        error_details=service_info.get('error', 'Unknown error'))
+            
+            # Log the raw values being returned to the status boxes for service creation error
+            logger.error("Raw service creation error values for status boxes", 
+                       status_type=type("Error").__name__,
+                       status_value="Error",
+                       message_type=type(error_msg).__name__,
+                       message_value=error_msg,
+                       service_url_type=type("").__name__,
+                       service_url_value="",
+                       model_def_path_type=type("").__name__,
+                       model_def_path_value="")
+            
+            # Create service creation error return tuple and log it
+            error_tuple = ("Error", error_msg, "", "")
+            logger.error("Service creation error return tuple for Gradio", 
+                       return_tuple=error_tuple,
+                       tuple_type=type(error_tuple).__name__,
+                       tuple_length=len(error_tuple))
+            
+            return error_tuple
             
         # Start service
         progress(0.95, "Starting service...")
         service_info = await start_service(service_info["id"])
+        logger.info("Service info after starting service", service_info=service_info)
         
-        if service_info["status"] == ServiceStatus.ERROR:
-            return "Error", f"Failed to start service: {service_info.get('error', 'Unknown error')}", "", ""
+        if service_info.get("status") == ServiceStatus.ERROR:
+            error_msg = f"Failed to start service: {service_info.get('error', 'Unknown error')}"
+            logger.error(error_msg, 
+                        service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()},
+                        error_details=service_info.get('error', 'Unknown error'))
             
-        # Return success
+            # Log the raw values being returned to the status boxes for service start error
+            logger.error("Raw service start error values for status boxes", 
+                       status_type=type("Error").__name__,
+                       status_value="Error",
+                       message_type=type(error_msg).__name__,
+                       message_value=error_msg,
+                       service_url_type=type("").__name__,
+                       service_url_value="",
+                       model_def_path_type=type("").__name__,
+                       model_def_path_value="")
+            
+            # Create service start error return tuple and log it
+            error_tuple = ("Error", error_msg, "", "")
+            logger.error("Service start error return tuple for Gradio", 
+                       return_tuple=error_tuple,
+                       tuple_type=type(error_tuple).__name__,
+                       tuple_length=len(error_tuple))
+            
+            return error_tuple
+            
+        # Return success only if service is actually ready
         progress(1.0, "Service started successfully!")
         model_def_path = service_info.get("model_def_path", "")
-        service_id = service_info["id"]
-        service_url = service_info["url"]
+        service_id = service_info.get("id", "")
+        service_url = service_info.get("url", "")
         
-        return (
-            "Success ", 
+        # Check if service is in the correct state
+        service_status = service_info.get("status", "")
+        logger.info("Checking service status before returning", 
+                   service_status=service_status,
+                   expected_statuses=[ServiceStatus.READY, ServiceStatus.PROCESSING])
+        
+        # Only return Success if the service is in READY or PROCESSING state
+        if service_status not in [ServiceStatus.READY, ServiceStatus.PROCESSING]:
+            error_msg = f"Service in unexpected state: {service_status}"
+            logger.error(error_msg, service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
+            
+            # Log the raw values being returned to the status boxes for unexpected state
+            logger.error("Raw unexpected state error values for status boxes", 
+                       status_type=type("Error").__name__,
+                       status_value="Error",
+                       message_type=type(error_msg).__name__,
+                       message_value=error_msg,
+                       service_url_type=type(service_url).__name__,
+                       service_url_value=service_url,
+                       model_def_path_type=type(model_def_path).__name__,
+                       model_def_path_value=model_def_path)
+            
+            # Create unexpected state error return tuple and log it
+            error_tuple = ("Error", error_msg, service_url, model_def_path)
+            logger.error("Unexpected state error return tuple for Gradio", 
+                       return_tuple=error_tuple,
+                       tuple_type=type(error_tuple).__name__,
+                       tuple_length=len(error_tuple))
+            
+            return error_tuple
+        
+        # Log the raw values being returned to the status boxes
+        logger.info("Raw values for status boxes", 
+                   status_type=type("Success").__name__,
+                   status_value="Success",
+                   message_type=type(f"RAG Service created and started. Service ID: {service_id}").__name__,
+                   message_value=f"RAG Service created and started. Service ID: {service_id}",
+                   service_url_type=type(service_url).__name__,
+                   service_url_value=service_url,
+                   model_def_path_type=type(model_def_path).__name__,
+                   model_def_path_value=model_def_path)
+        
+        # Log the values being returned to the status boxes
+        logger.info("Returning values to status boxes", 
+                   status="Success",
+                   message=f"RAG Service created and started. Service ID: {service_id}",
+                   service_url=service_url,
+                   model_def_path=model_def_path)
+        
+        # Create return tuple and log it
+        return_tuple = (
+            "Success", 
             f"RAG Service created and started. Service ID: {service_id}", 
             service_url, 
             model_def_path
         )
+        logger.info("Final return tuple for Gradio", 
+                   return_tuple=return_tuple,
+                   tuple_type=type(return_tuple).__name__,
+                   tuple_length=len(return_tuple))
+        
+        return return_tuple
         
     except Exception as e:
-        logger.error("Error creating RAG service", error=str(e))
-        return "Error", f"Error: {str(e)}", "", ""
+        error_message = f"Error: {str(e)}"
+        logger.error("Error creating RAG service", 
+                    error=str(e), 
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc())
+        
+        # Log the raw values being returned to the status boxes in error case
+        logger.error("Raw error values for status boxes", 
+                   status_type=type("Error").__name__,
+                   status_value="Error",
+                   message_type=type(error_message).__name__,
+                   message_value=error_message,
+                   service_url_type=type("").__name__,
+                   service_url_value="",
+                   model_def_path_type=type("").__name__,
+                   model_def_path_value="")
+        
+        # Create error return tuple and log it
+        error_tuple = ("Error", error_message, "", "")
+        logger.error("Final error return tuple for Gradio", 
+                   return_tuple=error_tuple,
+                   tuple_type=type(error_tuple).__name__,
+                   tuple_length=len(error_tuple))
+        
+        return error_tuple
 
 
 def create_interface() -> gr.Blocks:
