@@ -5,13 +5,9 @@ cd /models/RAGModelService
 pip install -e .
 pip install gradio==5.23.1
 
-pip install backend.ai-client==25.4.0 &
-
-
-source /models/RAGModelService/.env
+nohup pip install backend.ai-client==25.4.0 > backend_install.log 2>&1 &
 
 echo "" >> ~/.bashrc
 echo "# Environment variables from RAGModelService" >> ~/.bashrc
 cat /models/RAGModelService/.env >> ~/.bashrc
 echo "# End of RAGModelService environment variables" >> ~/.bashrc
-source ~/.bashrc

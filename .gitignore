@@ -21,3 +21,5 @@ bai_manager/*
 *.env
 github_docs/*
 embedding_indices/*
+rag_services/*
+

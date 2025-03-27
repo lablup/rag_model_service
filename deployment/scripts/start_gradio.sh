@@ -22,15 +22,5 @@ python /models/RAGModelService/auto_rag_service/launch_gradio.py \
     --port 8000
 
 
-python3 /models/RAGModelService/interfaces/gradio_app/gradio_app.py \
-    --indices-path \
-    $BACKEND_MODEL_PATH/${RAG_SERVICE_PATH}/"indices" \
-    --docs-path \
-    $BACKEND_MODEL_PATH/${RAG_SERVICE_PATH}/"docs/docs" \
-    --host \
-    0.0.0.0 \
-    --port \
-    8000
-
 # Keep the container running
 tail -f /dev/null
