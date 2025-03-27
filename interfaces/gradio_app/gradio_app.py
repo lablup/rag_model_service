@@ -73,10 +73,38 @@ async def read_markdown_file(file_path: str | Path) -> str:
         logger.info(f"File is file: {file_path.is_file()}")
         logger.info(f"File absolute path: {file_path.absolute()}")
 
+        # If file doesn't exist, try alternative paths
         if not file_path.exists():
-            error_msg = f"File not found: {file_path}"
-            logger.error(error_msg)
-            return f"Error: {error_msg}"
+            original_path = file_path
+            
+            # Try path with RAGModelService if it's not in the path
+            if "RAGModelService" not in str(file_path):
+                path_str = str(file_path)
+                path_parts = path_str.split("/")
+                for i in range(len(path_parts)):
+                    if path_parts[i] == "rag_services" and i > 0:
+                        rag_path_parts = path_parts.copy()
+                        rag_path_parts.insert(i, "RAGModelService")
+                        alt_path = Path("/".join(rag_path_parts))
+                        logger.info(f"Trying alternative path with RAGModelService: {alt_path}")
+                        if alt_path.exists() and alt_path.is_file():
+                            logger.info(f"Found file at alternative path with RAGModelService: {alt_path}")
+                            file_path = alt_path
+                            break
+            
+            # Try path without RAGModelService if it's in the path
+            if not file_path.exists() and "RAGModelService" in str(original_path):
+                alt_path = Path(str(original_path).replace("/RAGModelService", ""))
+                logger.info(f"Trying alternative path without RAGModelService: {alt_path}")
+                if alt_path.exists() and alt_path.is_file():
+                    logger.info(f"Found file at alternative path without RAGModelService: {alt_path}")
+                    file_path = alt_path
+            
+            # If still not found, report error
+            if not file_path.exists():
+                error_msg = f"File not found in any location: {original_path}"
+                logger.error(error_msg)
+                return f"Error: {error_msg}"
 
         logger.info(f"File exists, reading content...")
         async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
@@ -269,16 +297,58 @@ def create_gradio_interface(
         # Test with a specific file we know is causing problems
         test_path = "source/installation/linux.md"
         logger.error(f"Manual test - Testing with path: {test_path}")
+        
         # Try to find this file directly to ensure our lookup is working
         test_direct_path = actual_docs_path / "docs" / test_path
         logger.error(f"Manual direct path: {test_direct_path}")
         logger.error(f"Manual direct path exists: {test_direct_path.exists()}")
         
+        # Try alternative path with RAGModelService if it's not in the path
+        if "RAGModelService" not in str(actual_docs_path):
+            path_str = str(actual_docs_path)
+            path_parts = path_str.split("/")
+            for i in range(len(path_parts)):
+                if path_parts[i] == "rag_services" and i > 0:
+                    rag_path_parts = path_parts.copy()
+                    rag_path_parts.insert(i, "RAGModelService")
+                    alt_path = Path("/".join(rag_path_parts))
+                    alt_test_path = alt_path / "docs" / test_path
+                    logger.error(f"Alternative path with RAGModelService: {alt_test_path}")
+                    logger.error(f"Alternative path exists: {alt_test_path.exists()}")
+                    break
+        
+        # Try alternative path without RAGModelService if it's in the path
+        if "RAGModelService" in str(actual_docs_path):
+            alt_path = Path(str(actual_docs_path).replace("/RAGModelService", ""))
+            alt_test_path = alt_path / "docs" / test_path
+            logger.error(f"Alternative path without RAGModelService: {alt_test_path}")
+            logger.error(f"Alternative path exists: {alt_test_path.exists()}")
+        
         # Recursively look for linux.md to confirm if it exists anywhere
         logger.error("Looking for linux.md anywhere in the docs path...")
-        for root, dirs, files in os.walk(actual_docs_path):
-            if "linux.md" in files:
-                logger.error(f"FOUND linux.md at: {Path(root) / 'linux.md'}")
+        search_paths = [actual_docs_path]
+        
+        # Add alternative search paths
+        if "RAGModelService" not in str(actual_docs_path):
+            path_str = str(actual_docs_path)
+            path_parts = path_str.split("/")
+            for i in range(len(path_parts)):
+                if path_parts[i] == "rag_services" and i > 0:
+                    rag_path_parts = path_parts.copy()
+                    rag_path_parts.insert(i, "RAGModelService")
+                    search_paths.append(Path("/".join(rag_path_parts)))
+                    break
+        
+        if "RAGModelService" in str(actual_docs_path):
+            search_paths.append(Path(str(actual_docs_path).replace("/RAGModelService", "")))
+        
+        # Search in all paths
+        for search_path in search_paths:
+            logger.error(f"Searching in: {search_path}")
+            if search_path.exists():
+                for root, dirs, files in os.walk(search_path):
+                    if "linux.md" in files:
+                        logger.error(f"FOUND linux.md at: {Path(root) / 'linux.md'}")
     except Exception as e:
         logger.error(f"Manual test FAILED with error: {e}")
     logger.error("=================== END MANUAL TEST ===================")
@@ -324,10 +394,64 @@ def create_gradio_interface(
                         actual_docs_path / "docs" / "docs" / source_path
                     ])
                 
+                # Try paths with RAGModelService if it's not in the path
+                if "RAGModelService" not in str(actual_docs_path):
+                    path_str = str(actual_docs_path)
+                    path_parts = path_str.split("/")
+                    for i in range(len(path_parts)):
+                        if path_parts[i] == "rag_services" and i > 0:
+                            # Create path with RAGModelService inserted
+                            rag_path_parts = path_parts.copy()
+                            rag_path_parts.insert(i, "RAGModelService")
+                            rag_path = Path("/".join(rag_path_parts))
+                            
+                            # Add all the same combinations but with RAGModelService in the path
+                            rag_possible_paths = [
+                                rag_path / file_path,
+                                rag_path / "docs" / file_path,
+                                rag_path / "docs" / "docs" / file_path
+                            ]
+                            
+                            # For source paths, add the same combinations
+                            if str(file_path).startswith(("source/", "source\\")):
+                                rag_possible_paths.extend([
+                                    rag_path / "docs" / "source" / non_source_path,
+                                    rag_path / "docs" / "docs" / "source" / non_source_path,
+                                    rag_path / "source" / non_source_path,
+                                    rag_path / "docs" / source_path,
+                                    rag_path / "docs" / "docs" / source_path
+                                ])
+                            
+                            possible_paths.extend(rag_possible_paths)
+                            break
+                
+                # Try paths without RAGModelService if it's in the path
+                if "RAGModelService" in str(actual_docs_path):
+                    no_rag_path = Path(str(actual_docs_path).replace("/RAGModelService", ""))
+                    
+                    # Add all the same combinations but without RAGModelService in the path
+                    no_rag_possible_paths = [
+                        no_rag_path / file_path,
+                        no_rag_path / "docs" / file_path,
+                        no_rag_path / "docs" / "docs" / file_path
+                    ]
+                    
+                    # For source paths, add the same combinations
+                    if str(file_path).startswith(("source/", "source\\")):
+                        no_rag_possible_paths.extend([
+                            no_rag_path / "docs" / "source" / non_source_path,
+                            no_rag_path / "docs" / "docs" / "source" / non_source_path,
+                            no_rag_path / "source" / non_source_path,
+                            no_rag_path / "docs" / source_path,
+                            no_rag_path / "docs" / "docs" / source_path
+                        ])
+                    
+                    possible_paths.extend(no_rag_possible_paths)
+                
                 # Try each possible path
                 for possible_path in possible_paths:
                     logger.info(f"Trying path: {possible_path}")
-                    if possible_path.exists() and possible_path.is_file():
+                    if possible_path.exists():
                         logger.info(f"Found file at: {possible_path}")
                         file_path = possible_path
                         break
@@ -596,8 +720,63 @@ def create_gradio_interface(
                         actual_docs_path / "docs" / "docs" / source_path
                     ])
                 
+                # Try paths with RAGModelService if it's not in the path
+                if "RAGModelService" not in str(actual_docs_path):
+                    path_str = str(actual_docs_path)
+                    path_parts = path_str.split("/")
+                    for i in range(len(path_parts)):
+                        if path_parts[i] == "rag_services" and i > 0:
+                            # Create path with RAGModelService inserted
+                            rag_path_parts = path_parts.copy()
+                            rag_path_parts.insert(i, "RAGModelService")
+                            rag_path = Path("/".join(rag_path_parts))
+                            
+                            # Add all the same combinations but with RAGModelService in the path
+                            rag_possible_paths = [
+                                rag_path / relative_path,
+                                rag_path / "docs" / relative_path,
+                                rag_path / "docs" / "docs" / relative_path
+                            ]
+                            
+                            # For source paths, add the same combinations
+                            if str(relative_path).startswith(("source/", "source\\")):
+                                rag_possible_paths.extend([
+                                    rag_path / "docs" / "source" / non_source_path,
+                                    rag_path / "docs" / "docs" / "source" / non_source_path,
+                                    rag_path / "source" / non_source_path,
+                                    rag_path / "docs" / source_path,
+                                    rag_path / "docs" / "docs" / source_path
+                                ])
+                            
+                            possible_paths.extend(rag_possible_paths)
+                            break
+                
+                # Try paths without RAGModelService if it's in the path
+                if "RAGModelService" in str(actual_docs_path):
+                    no_rag_path = Path(str(actual_docs_path).replace("/RAGModelService", ""))
+                    
+                    # Add all the same combinations but without RAGModelService in the path
+                    no_rag_possible_paths = [
+                        no_rag_path / relative_path,
+                        no_rag_path / "docs" / relative_path,
+                        no_rag_path / "docs" / "docs" / relative_path
+                    ]
+                    
+                    # For source paths, add the same combinations
+                    if str(relative_path).startswith(("source/", "source\\")):
+                        no_rag_possible_paths.extend([
+                            no_rag_path / "docs" / "source" / non_source_path,
+                            no_rag_path / "docs" / "docs" / "source" / non_source_path,
+                            no_rag_path / "source" / non_source_path,
+                            no_rag_path / "docs" / source_path,
+                            no_rag_path / "docs" / "docs" / source_path
+                        ])
+                    
+                    possible_paths.extend(no_rag_possible_paths)
+                
                 full_path = None
                 for path in possible_paths:
+                    logger.info(f"Trying path: {path}")
                     if path.exists():
                         full_path = path
                         logger.info(f"Found document at: {full_path}")
