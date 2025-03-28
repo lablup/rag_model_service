@@ -1,3 +1,122 @@
+#!/usr/bin/env python3
+"""
+FastAPI Server for RAG Model Service
+====================================
+
+This module provides an OpenAI-compatible API for the RAG Model Service.
+It implements a FastAPI server that exposes endpoints for chat completions
+with retrieval-augmented generation capabilities.
+
+Features:
+- OpenAI-compatible API endpoints (/v1/chat/completions)
+- Support for streaming responses
+- Integration with vector store for document retrieval
+- Authentication via API key (optional)
+- Configurable service paths and model parameters
+
+Usage Examples:
+--------------
+
+1. Start the server:
+   ```bash
+   # Basic usage
+   python interfaces/fastapi_app/fastapi_server.py
+
+   # With custom port and host
+   python interfaces/fastapi_app/fastapi_server.py --port 8080 --host 127.0.0.1
+
+   # With specific service ID (for path resolution)
+   python interfaces/fastapi_app/fastapi_server.py --service-id my_service_id
+   ```
+
+2. Make API requests:
+   ```python
+   # Example Python client using requests
+   import requests
+   import json
+
+   url = "http://localhost:8000/v1/chat/completions"
+   headers = {
+       "Content-Type": "application/json",
+       "Authorization": "Bearer YOUR_API_KEY"  # Optional if VALIDATE_API_KEY=false
+   }
+   data = {
+       "model": "gpt-4o",
+       "messages": [
+           {"role": "system", "content": "You are a helpful assistant with access to documentation."},
+           {"role": "user", "content": "What is TensorRT-LLM used for?"}
+       ],
+       "temperature": 0.2,
+       "stream": False
+   }
+
+   response = requests.post(url, headers=headers, json=data)
+   print(json.dumps(response.json(), indent=2))
+   ```
+
+3. Streaming example:
+   ```python
+   # Example Python client for streaming responses
+   import requests
+   import json
+
+   url = "http://localhost:8000/v1/chat/completions"
+   headers = {
+       "Content-Type": "application/json",
+       "Authorization": "Bearer YOUR_API_KEY",  # Optional if VALIDATE_API_KEY=false
+       "Accept": "text/event-stream"
+   }
+   data = {
+       "model": "gpt-4o",
+       "messages": [
+           {"role": "system", "content": "You are a helpful assistant with access to documentation."},
+           {"role": "user", "content": "Explain how to install TensorRT-LLM"}
+       ],
+       "temperature": 0.2,
+       "stream": True
+   }
+
+   with requests.post(url, headers=headers, json=data, stream=True) as response:
+       for line in response.iter_lines():
+           if line:
+               line = line.decode('utf-8')
+               if line.startswith('data: '):
+                   content = line[6:]
+                   if content == '[DONE]':
+                       break
+                   try:
+                       chunk = json.loads(content)
+                       if chunk['choices'][0]['delta'].get('content'):
+                           print(chunk['choices'][0]['delta']['content'], end='')
+                   except json.JSONDecodeError:
+                       pass
+   ```
+
+4. Using with curl:
+   ```bash
+   curl -X POST http://localhost:8000/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer YOUR_API_KEY" \
+     -d '{
+       "model": "gpt-4o",
+       "messages": [
+         {"role": "system", "content": "You are a helpful assistant with access to documentation."},
+         {"role": "user", "content": "What is TensorRT-LLM?"}
+       ],
+       "temperature": 0.2
+     }'
+   ```
+
+Environment Variables:
+---------------------
+- OPENAI_API_KEY: API key for OpenAI (used for embeddings and LLM)
+- VALIDATE_API_KEY: Whether to validate API keys (default: "false")
+- SERVICE_ID: Service ID for path resolution (default: "fastapi")
+- OPENAI_MODEL: Model to use for chat completions (default from config)
+- TEMPERATURE: Temperature for generation (default from config)
+- MAX_RESULTS: Maximum number of results to return (default from config)
+"""
+
 import asyncio
 import json
 import os
@@ -149,10 +268,16 @@ app.add_middleware(
 config = load_config()
 path_config = config.paths
 llm_config = config.llm
-retrieval_settings = config.retrieval
 
 # Get service ID from environment variable or use default
 service_id = os.getenv("SERVICE_ID", "fastapi")
+
+# Create retrieval settings from RAG config
+retrieval_settings = RetrievalSettings(
+    max_results=config.rag.max_results,
+    max_tokens_per_doc=llm_config.max_tokens_per_doc,
+    service_id=service_id
+)
 
 # Initialize with None, will be set during startup
 vector_store = None
@@ -177,7 +302,7 @@ async def startup_event():
     print(f"Indices path: {indices_root}")
     print(f"LLM model: {llm_config.model_name}")
     print(f"Temperature: {llm_config.temperature}")
-    print(f"Max results: {retrieval_settings.top_k}")
+    print(f"Max results: {retrieval_settings.max_results}")
 
     # Create necessary directories if they don't exist
     try:

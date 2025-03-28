@@ -200,10 +200,12 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     
     # Use provided values or defaults from config
     if port is None:
-        port = config.service.port
+        # Use server config instead of service config
+        port = config.server.port if hasattr(config, 'server') else 8000
     
     if service_type is None:
-        service_type = config.service.type
+        # Default to fastapi if not specified
+        service_type = "fastapi"
     
     # Parse the GitHub URL
     owner, repo, branch, path = parse_github_url(github_url)
@@ -219,9 +221,18 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     # Update path configuration with service ID
     path_config.service_id = service_id
     
+    # Get BACKEND_MODEL_PATH from environment variable or use a default
+    backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
+    
+    # Get RAG_SERVICE_PATH from environment variable or use a default
+    rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
+    
+    # Ensure rag_service_path ends with a slash
+    if not rag_service_path.endswith('/'):
+        rag_service_path += '/'
+    
     # Build the service-specific paths using the configuration
-    backend_model_path = path_config.backend_model_path
-    service_dir_path = f"{backend_model_path}/RAGModelService/rag_services/{service_id}"
+    service_dir_path = f"{rag_service_path}{service_id}"
     indices_path = f"{service_dir_path}/indices"
     docs_path = f"{service_dir_path}/docs"
     

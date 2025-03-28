@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Union
 
@@ -28,18 +29,24 @@ import structlog
 import asyncio
 import traceback
 
+# Filter specific Gradio warnings about documentation groups
+warnings.filterwarnings("ignore", category=UserWarning, module="gradio_client.documentation")
+
 # Import utility modules
 from utils.github_utils import validate_github_url, parse_github_url, GitHubInfo
 from utils.service_utils import (
     setup_environment, 
     get_unique_service_id,
-    ServiceStatus
+    ServiceStatus,
+    ServiceConfig,
+    ServerConfig,
+    save_service_info,
 )
 from core.document_processor import DocumentProcessor
 from data.vector_store import VectorStore
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
-from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig, ServiceConfig
+from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig
 from interfaces.portal.generate_model_definition import generate_model_definition as gen_model_def
 from interfaces.portal.generate_model_definition import write_model_definition
 
@@ -99,7 +106,15 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         # Load configuration
         config = load_config()
         path_config = config.paths
-        service_config = config.service
+        
+        # Create a service configuration
+        service_config = ServerConfig(
+            host=config.server.host,
+            port=config.server.port
+        )
+        
+        # Define service type (not in ServerConfig)
+        service_type = "fastapi"  # Default to fastapi
         
         github_info = parse_github_url(github_url)
         service_id = service_dir.name
@@ -112,10 +127,16 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         
         # Get configuration values
         port = service_config.port
-        service_type = service_config.type
+        
+        # Get BACKEND_MODEL_PATH from environment variable or use a default
+        backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
+        
+        # Get RAG_SERVICE_PATH from environment variable or use a default
+        rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
         
         logger.info("Using configuration for model definition", 
-                   backend_model_path=path_config.backend_model_path,
+                   backend_model_path=backend_model_path,
+                   rag_service_path=rag_service_path,
                    service_id=service_id,
                    port=port,
                    service_type=service_type)
@@ -279,7 +300,11 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         logger.info("Generated model definition", model_def_path=str(model_def_path) if model_def_path else None)
         
         if model_def_path:
+            # Make sure to update the service_info with the model definition path
             service_info["model_def_path"] = str(model_def_path)
+            # Save the updated service info to ensure it's persisted
+            save_service_info(service_id, service_info)
+            logger.info("Updated service info with model definition path", model_def_path=str(model_def_path))
         else:
             logger.warning("Failed to generate model definition")
             
@@ -386,18 +411,66 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 # Get model definition path
                 model_def_path = service_info.get("model_def_path")
                 if not model_def_path:
-                    raise ValueError("Model definition path not found in service info")
+                    # Try multiple fallback mechanisms to find the model definition file
+                    
+                    # 1. Try standard naming convention in the service directory
+                    possible_paths = [
+                        service_dir / f"model-definition-{service_id}.yml",
+                        service_dir / f"model-definition-{service_id}.yaml",
+                    ]
+                    
+                    # 2. Try looking for any model definition file in the service directory
+                    for file in service_dir.glob("model-definition-*.y*ml"):
+                        possible_paths.append(file)
+                    
+                    # Check all possible paths
+                    for path in possible_paths:
+                        if path.exists():
+                            model_def_path = str(path)
+                            # Update service_info with the found path
+                            service_info["model_def_path"] = model_def_path
+                            save_service_info(service_id, service_info)
+                            logger.info("Found and set model definition path", model_def_path=model_def_path)
+                            break
+                    
+                    # If still not found, try to generate it
+                    if not model_def_path:
+                        try:
+                            logger.info("Attempting to regenerate model definition", github_url=service_info["github_url"])
+                            regenerated_path = generate_model_definition(service_info["github_url"], service_dir)
+                            if regenerated_path:
+                                model_def_path = str(regenerated_path)
+                                service_info["model_def_path"] = model_def_path
+                                save_service_info(service_id, service_info)
+                                logger.info("Regenerated and set model definition path", model_def_path=model_def_path)
+                            else:
+                                raise ValueError("Failed to regenerate model definition")
+                        except Exception as e:
+                            logger.error("Failed to regenerate model definition", error=str(e))
+                            raise ValueError("Model definition path not found in service info and could not be constructed")
                 
-                # Calculate relative path using configuration system
-                config_base_path = path_config.base_path
-                model_def_relative_path = str(model_def_path).replace(str(config_base_path) + "/", "")
+                # Ensure model_def_path is a string
+                if isinstance(model_def_path, Path):
+                    model_def_path = str(model_def_path)
+                
+                # Get the model definition path relative to the backend model path
+                # This is needed for Backend.AI service creation
+                model_def_relative_path = model_def_path
+                if isinstance(model_def_path, str) and "rag_services" in model_def_path:
+                    # Extract the part of the path after rag_services
+                    parts = model_def_path.split("rag_services/")
+                    if len(parts) > 1:
+                        model_def_relative_path = f"rag_services/{parts[1]}"
+                        logger.info("Using relative model definition path", 
+                                   original=model_def_path, 
+                                   relative=model_def_relative_path)
                 
                 logger.info("Creating Backend.AI service", 
                            service_name=service_name,
                            model_def_path=model_def_relative_path)
                 
-                # Get backend model path from configuration
-                backend_model_path = path_config.backend_model_path
+                # Get backend model path from environment variable
+                backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
                 
                 # Create Backend.AI model service with environment variables
                 create_service_cmd = [
@@ -429,7 +502,7 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=path_config.base_path
+                    cwd=path_config.project_path
                 )
                 
                 # Print raw output for debugging
@@ -543,8 +616,8 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
     # Create a start.sh script that Backend.AI will execute
     start_script = service_dir / "start.sh"
     
-    # Get backend model path from configuration
-    backend_model_path = path_config.backend_model_path
+    # Get backend model path from environment variable
+    backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
     
     script_content = f"""#!/bin/bash
 # Start script for RAG Service {service_id}

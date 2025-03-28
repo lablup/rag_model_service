@@ -80,6 +80,51 @@ def get_unique_service_id() -> str:
     return str(uuid.uuid4())[:8]
 
 
+def save_service_info(service_id: str, service_info: Dict[str, Any]) -> bool:
+    """
+    Save service information to a file.
+    
+    Args:
+        service_id: Unique service identifier
+        service_info: Dictionary containing service information
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        import json
+        
+        # Create services directory if it doesn't exist
+        services_dir = Path("rag_services")
+        services_dir.mkdir(exist_ok=True)
+        
+        # Create service directory if it doesn't exist
+        service_dir = services_dir / service_id
+        service_dir.mkdir(exist_ok=True)
+        
+        # Create info file path
+        info_file = service_dir / "service_info.json"
+        
+        # Convert Path objects to strings for JSON serialization
+        serializable_info = {}
+        for key, value in service_info.items():
+            if isinstance(value, Path):
+                serializable_info[key] = str(value)
+            else:
+                serializable_info[key] = value
+        
+        # Write info to file
+        with open(info_file, "w") as f:
+            json.dump(serializable_info, f, indent=2)
+            
+        logger.info("Saved service info", service_id=service_id, info_file=str(info_file))
+        return True
+        
+    except Exception as e:
+        logger.error("Error saving service info", service_id=service_id, error=str(e))
+        return False
+
+
 def setup_environment() -> bool:
     """
     Load .env file and validate required environment variables.

@@ -424,6 +424,40 @@ def create_gradio_interface(
                     actual_docs_path / "docs" / "docs" / file_path, # with double docs directory
                 ])
                 
+                # Check for rag_services directory structure using the standard patterns
+                rag_service_path = os.environ.get("RAG_SERVICE_PATH", str(Path(os.environ.get("PROJECT_PATH", "/Users/sergeyleksikov/Documents/GitHub/RAGModelService")) / "rag_services"))
+                
+                # Extract service ID from the docs path if possible
+                service_id = None
+                if "rag_services" in str(actual_docs_path):
+                    path_parts = str(actual_docs_path).split("/")
+                    for i, part in enumerate(path_parts):
+                        if part == "rag_services" and i+1 < len(path_parts):
+                            service_id = path_parts[i+1]
+                            break
+                
+                # If we have a service ID, try the standard RAG service paths
+                if service_id:
+                    logger.info(f"Detected service ID: {service_id}, trying standard RAG service paths")
+                    possible_paths.extend([
+                        Path(f"{rag_service_path}/{service_id}/docs/{file_path}"),
+                        Path(f"{rag_service_path}/{service_id}/docs/docs/{file_path}"),
+                        Path(f"{rag_service_path}/{service_id}/docs/docs/source/{file_path}")
+                    ])
+                    
+                    # Add direct path from metadata if it exists
+                    if isinstance(file_path, str) and "metadata" in file_path:
+                        try:
+                            # This might be a JSON string from the metadata
+                            import json
+                            metadata = json.loads(file_path)
+                            if "source_path" in metadata:
+                                source_path = Path(metadata["source_path"])
+                                logger.info(f"Found source_path in metadata: {source_path}")
+                                possible_paths.append(source_path)
+                        except:
+                            pass
+                
                 # For paths like 'source/installation/linux.md', try both with and without prepending 'docs/'
                 if str(file_path).startswith(("source/", "source\\")):
                     source_path = file_path
@@ -449,7 +483,8 @@ def create_gradio_interface(
                 
                 # If still not found, try a last resort recursive search
                 if not resolved_path:
-                    file_name = file_path.name
+                    # Convert string to Path object before accessing name attribute
+                    file_name = Path(relative_path).name
                     logger.info(f"File not found in standard locations. Searching recursively for: {file_name}")
                     
                     # Recursively search for the file by name
@@ -691,34 +726,46 @@ def create_gradio_interface(
                 
                 # Resolve the path using PathConfig
                 resolved_path = None
-                possible_paths = [
-                    actual_docs_path / relative_path,
-                    actual_docs_path / "docs" / relative_path,
-                    actual_docs_path / "docs" / "docs" / relative_path,
-                ]
-                if str(relative_path).startswith(("source/", "source\\")):
-                    source_path = relative_path
-                    non_source_path = Path(str(relative_path).replace("source/", "").replace("source\\", ""))
-                    possible_paths.extend([
-                        actual_docs_path / "docs" / "source" / non_source_path,
-                        actual_docs_path / "source" / non_source_path,
-                        actual_docs_path / "docs" / source_path,
-                    ])
-                for possible_path in possible_paths:
-                    logger.info(f"Trying path: {possible_path}")
-                    if possible_path.exists():
-                        logger.info(f"Found file at: {possible_path}")
-                        resolved_path = possible_path
-                        break
+                
+                # First try the direct source_path from metadata if available
+                if "source_path" in metadata:
+                    source_path = Path(metadata["source_path"])
+                    logger.info(f"Trying direct source_path from metadata: {source_path}")
+                    if source_path.exists():
+                        logger.info(f"Found file at direct source_path: {source_path}")
+                        resolved_path = source_path
+                
+                # If not found via source_path, try standard paths
                 if not resolved_path:
-                    file_name = relative_path.name
-                    logger.info(f"File not found in standard locations. Searching recursively for: {file_name}")
-                    for root, dirs, files in os.walk(actual_docs_path):
-                        if file_name in files:
-                            found_path = Path(root) / file_name
-                            logger.info(f"Found file by name at: {found_path}")
-                            resolved_path = found_path
+                    possible_paths = [
+                        actual_docs_path / relative_path,
+                        actual_docs_path / "docs" / relative_path,
+                        actual_docs_path / "docs" / "docs" / relative_path,
+                    ]
+                    if str(relative_path).startswith(("source/", "source\\")):
+                        source_path = relative_path
+                        non_source_path = Path(str(relative_path).replace("source/", "").replace("source\\", ""))
+                        possible_paths.extend([
+                            actual_docs_path / "docs" / "source" / non_source_path,
+                            actual_docs_path / "source" / non_source_path,
+                            actual_docs_path / "docs" / source_path,
+                        ])
+                    for possible_path in possible_paths:
+                        logger.info(f"Trying path: {possible_path}")
+                        if possible_path.exists():
+                            logger.info(f"Found file at: {possible_path}")
+                            resolved_path = possible_path
                             break
+                    if not resolved_path:
+                        # Convert string to Path object before accessing name attribute
+                        file_name = Path(relative_path).name
+                        logger.info(f"File not found in standard locations. Searching recursively for: {file_name}")
+                        for root, dirs, files in os.walk(actual_docs_path):
+                            if file_name in files:
+                                found_path = Path(root) / file_name
+                                logger.info(f"Found file by name at: {found_path}")
+                                resolved_path = found_path
+                                break
                 if not resolved_path or not resolved_path.exists():
                     logger.warning(f"File not found in any location: {relative_path}")
                     continue
