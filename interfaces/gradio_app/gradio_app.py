@@ -100,10 +100,47 @@ async def read_markdown_file(file_path: str | Path) -> str:
                     logger.info(f"Found file at alternative path without RAGModelService: {alt_path}")
                     file_path = alt_path
             
+            # Try replacing GitHub owner/repo with service ID format
+            # This handles the case where paths are created with UUIDs instead of GitHub owner/repo
+            if not file_path.exists():
+                path_str = str(original_path)
+                # Look for pattern like /models/RAGModelService/rag_services/NVIDIA/TensorRT-LLM/
+                github_pattern = r'/models/RAGModelService/rag_services/([^/]+)/([^/]+)/'
+                match = re.search(github_pattern, path_str)
+                if match:
+                    # Get the service ID from environment variable or try common UUIDs
+                    service_id = os.environ.get('RAG_SERVICE_PATH', '')
+                    
+                    # If service ID is not set, try some common service ID formats
+                    if not service_id:
+                        # Try to find service ID in parent directories
+                        parent_dir = original_path.parent
+                        while parent_dir and str(parent_dir) != '/':
+                            if parent_dir.name and len(parent_dir.name) == 8 and re.match(r'^[0-9a-f]+$', parent_dir.name):
+                                service_id = parent_dir.name
+                                break
+                            parent_dir = parent_dir.parent
+                    
+                    if service_id:
+                        # Replace GitHub owner/repo with service ID
+                        owner_repo = f"{match.group(1)}/{match.group(2)}"
+                        alt_path_str = path_str.replace(owner_repo, service_id)
+                        alt_path = Path(alt_path_str)
+                        logger.info(f"Trying path with service ID: {alt_path}")
+                        if alt_path.exists() and alt_path.is_file():
+                            logger.info(f"Found file at path with service ID: {alt_path}")
+                            file_path = alt_path
+            
             # If still not found, report error
             if not file_path.exists():
                 error_msg = f"File not found in any location: {original_path}"
                 logger.error(error_msg)
+                logger.info(f"Parent directory exists: {original_path.parent.exists()} ")
+                
+                # List contents of parent directory if it exists
+                if original_path.parent.exists():
+                    logger.info(f"Contents of {original_path.parent}: {list(original_path.parent.iterdir())}")
+                
                 return f"Error: {error_msg}"
 
         logger.info(f"File exists, reading content...")
@@ -312,17 +349,17 @@ def create_gradio_interface(
                     rag_path_parts = path_parts.copy()
                     rag_path_parts.insert(i, "RAGModelService")
                     alt_path = Path("/".join(rag_path_parts))
-                    alt_test_path = alt_path / "docs" / test_path
-                    logger.error(f"Alternative path with RAGModelService: {alt_test_path}")
-                    logger.error(f"Alternative path exists: {alt_test_path.exists()}")
-                    break
+                    logger.error(f"Trying alternative path with RAGModelService: {alt_path}")
+                    if alt_path.exists() and alt_path.is_file():
+                        logger.error(f"Found file at alternative path with RAGModelService: {alt_path}")
+                        break
         
         # Try alternative path without RAGModelService if it's in the path
         if "RAGModelService" in str(actual_docs_path):
             alt_path = Path(str(actual_docs_path).replace("/RAGModelService", ""))
-            alt_test_path = alt_path / "docs" / test_path
-            logger.error(f"Alternative path without RAGModelService: {alt_test_path}")
-            logger.error(f"Alternative path exists: {alt_test_path.exists()}")
+            logger.error(f"Trying alternative path without RAGModelService: {alt_path}")
+            if alt_path.exists() and alt_path.is_file():
+                logger.error(f"Found file at alternative path without RAGModelService: {alt_path}")
         
         # Recursively look for linux.md to confirm if it exists anywhere
         logger.error("Looking for linux.md anywhere in the docs path...")
@@ -447,6 +484,52 @@ def create_gradio_interface(
                         ])
                     
                     possible_paths.extend(no_rag_possible_paths)
+                
+                # Try replacing GitHub owner/repo with service ID format
+                # This handles the case where paths are created with UUIDs instead of GitHub owner/repo
+                path_str = str(actual_docs_path)
+                # Look for pattern like /models/RAGModelService/rag_services/NVIDIA/TensorRT-LLM/
+                github_pattern = r'/models/RAGModelService/rag_services/([^/]+)/([^/]+)/'
+                match = re.search(github_pattern, path_str)
+                if match:
+                    # Get the service ID from environment variable
+                    service_id = os.environ.get('RAG_SERVICE_PATH', '')
+                    
+                    # If service ID is not set, try some common service ID formats
+                    if not service_id:
+                        # Try to find service ID in parent directories
+                        parent_dir = actual_docs_path.parent
+                        while parent_dir and str(parent_dir) != '/':
+                            if parent_dir.name and len(parent_dir.name) == 8 and re.match(r'^[0-9a-f]+$', parent_dir.name):
+                                service_id = parent_dir.name
+                                break
+                            parent_dir = parent_dir.parent
+                    
+                    if service_id:
+                        # Replace GitHub owner/repo with service ID
+                        owner_repo = f"{match.group(1)}/{match.group(2)}"
+                        alt_path_str = path_str.replace(owner_repo, service_id)
+                        alt_path = Path(alt_path_str)
+                        
+                        # Add all the same combinations but with service ID in the path
+                        service_id_possible_paths = [
+                            alt_path / file_path,
+                            alt_path / "docs" / file_path,
+                            alt_path / "docs" / "docs" / file_path
+                        ]
+                        
+                        # For source paths, add the same combinations
+                        if str(file_path).startswith(("source/", "source\\")):
+                            service_id_possible_paths.extend([
+                                alt_path / "docs" / "source" / non_source_path,
+                                alt_path / "docs" / "docs" / "source" / non_source_path,
+                                alt_path / "source" / non_source_path,
+                                alt_path / "docs" / source_path,
+                                alt_path / "docs" / "docs" / source_path
+                            ])
+                        
+                        logger.info(f"Adding paths with service ID {service_id}: {service_id_possible_paths}")
+                        possible_paths.extend(service_id_possible_paths)
                 
                 # Try each possible path
                 for possible_path in possible_paths:

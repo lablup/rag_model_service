@@ -123,6 +123,34 @@ class VectorStore:
                 alt_path = str(index_path).replace("/RAGModelService", "")
                 alternative_paths.append(Path(alt_path))
             
+            # Try replacing GitHub owner/repo with service ID format
+            # This handles the case where paths are created with UUIDs instead of GitHub owner/repo
+            import re
+            path_str = str(index_path)
+            # Look for pattern like /models/RAGModelService/rag_services/NVIDIA/TensorRT-LLM/
+            github_pattern = r'/models/RAGModelService/rag_services/([^/]+)/([^/]+)/'
+            match = re.search(github_pattern, path_str)
+            if match:
+                # Get the service ID from environment variable
+                service_id = os.environ.get('RAG_SERVICE_PATH', '')
+                
+                # If service ID is not set, try some common service ID formats
+                if not service_id:
+                    # Try to find service ID in parent directories
+                    parent_dir = self.indices_path.parent
+                    while parent_dir and str(parent_dir) != '/':
+                        if parent_dir.name and len(parent_dir.name) == 8 and re.match(r'^[0-9a-f]+$', parent_dir.name):
+                            service_id = parent_dir.name
+                            break
+                        parent_dir = parent_dir.parent
+                
+                if service_id:
+                    # Replace GitHub owner/repo with service ID
+                    owner_repo = f"{match.group(1)}/{match.group(2)}"
+                    alt_path_str = path_str.replace(owner_repo, service_id)
+                    alternative_paths.append(Path(alt_path_str))
+                    self.logger.info(f"Adding alternative path with service ID: {alt_path_str}")
+            
             # Check alternative paths
             for alt_path in alternative_paths:
                 self.logger.info(f"Trying alternative path: {alt_path}")
@@ -135,7 +163,7 @@ class VectorStore:
             if not index_path.exists():
                 self.logger.warning(f"Index not found at any path. Tried: {index_path} and {alternative_paths}")
                 return
-
+        
         try:
             self.logger.info(f"Loading index from: {index_path}")
             self.index = FAISS.load_local(
