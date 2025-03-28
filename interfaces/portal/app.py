@@ -266,6 +266,10 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         else:
             logger.warning("Failed to generate model definition")
             
+        # Create Backend.AI scripts
+        create_backend_scripts(service_id, service_dir)
+        logger.info("Created Backend.AI scripts")
+            
         # Report progress
         if progress_callback:
             progress_callback(0.9, "Preparing service...")
@@ -289,31 +293,6 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         }
         logger.error("Returning error info", error_info=error_info)
         return error_info
-
-
-def create_start_script(service_id: str, service_dir: Path) -> None:
-    """Create start.sh script for the service"""
-    start_script = service_dir / "start.sh"
-    
-    script_content = f"""#!/bin/bash
-# Start script for RAG Service {service_id}
-
-# Set environment variables
-export RAG_SERVICE_PATH="{service_id}"
-
-# Start the Gradio server
-python -m interfaces.cli_app.launch_gradio \\
-    --indices-path ./${{RAG_SERVICE_PATH}}/indices \\
-    --docs-path ./${{RAG_SERVICE_PATH}}/docs \\
-    --port 8000 \\
-    --host 0.0.0.0
-"""
-    
-    with open(start_script, "w") as f:
-        f.write(script_content)
-        
-    # Make the script executable
-    start_script.chmod(0o755)
 
 
 async def start_service(service_id: str) -> Dict[str, Any]:
@@ -357,98 +336,141 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 "model_def_path": "",
                 "id": service_id
             }
-            
-        # Find available port
-        port = find_available_port()
-        service_info["port"] = port
-        logger.info("Found available port", port=port)
-        
-        # Start service in background thread
-        def start_service_thread():
+
+        # Start service using Backend.AI
+        def start_backend_service_thread():
             try:
+                github_url = service_info["github_url"]
                 service_dir = Path(service_info["service_dir"])
-                docs_dir = Path(service_info["docs_dir"])
-                indices_dir = Path(service_info["indices_dir"])
                 
-                logger.info("Starting service thread", 
-                           service_dir=str(service_dir),
-                           docs_dir=str(docs_dir),
-                           indices_dir=str(indices_dir))
+                # Extract repository organization and name from GitHub URL
+                match = re.match(r'https?://github\.com/([^/]+)/([^/]+)', github_url)
+                if match:
+                    repo_org = match.group(1)
+                    repo_name = match.group(2)
+                    if "." in repo_name:
+                        repo_name = repo_name.split(".")[0]
+                        
+                    service_name = f"rag_{repo_name}"
+                else:
+                    # Fallback if URL doesn't match expected pattern
+                    repo_name = github_url.split("/")[-1]
+                    if "." in repo_name:
+                        repo_name = repo_name.split(".")[0]
+                    service_name = f"rag_service"
                 
-                cmd = [
-                    "python", "-m", "interfaces.cli_app.launch_gradio",
-                    "--indices-path", str(indices_dir),
-                    "--docs-path", str(docs_dir),
-                    "--port", str(port),
-                    "--host", "0.0.0.0"
+                # Get model definition path
+                model_def_path = service_info.get("model_def_path")
+                if not model_def_path:
+                    raise ValueError("Model definition path not found in service info")
+                
+                model_def_relative_path = str(model_def_path).replace(str(project_root) + "/", "")
+                
+                logger.info("Creating Backend.AI service", 
+                           service_name=service_name,
+                           model_def_path=model_def_relative_path)
+                
+                # Create Backend.AI model service with environment variables
+                create_service_cmd = [
+                    "backend.ai", "service", "create",
+                    "cr.backend.ai/testing/ngc-pytorch:24.12-pytorch2.6-py312-cuda12.6",
+                    "auto_rag",
+                    "1",
+                    "--name", service_name,
+                    "--tag", "rag_model_service",
+                    "--scaling-group", "nvidia-H100",
+                    "--model-definition-path", f"RAGModelService/{model_def_relative_path}",
+                    "--public",
+                    "-e", f"RAG_SERVICE_NAME={service_name}",
+                    "-e", f"RAG_SERVICE_PATH={service_id}",
+                    "-r", "cuda.shares=0",
+                    "-r", "mem=4g",
+                    "-r", "cpu=2"
                 ]
                 
-                logger.info("Executing command", cmd=cmd, cwd=str(project_root))
+                logger.info("Executing Backend.AI command", cmd=create_service_cmd)
                 
-                process = subprocess.Popen(
-                    cmd,
-                    cwd=project_root,
+                # Print the command for debugging
+                print(f"Executing command: {' '.join(create_service_cmd)}")
+                
+                # Run the command
+                create_result = subprocess.run(
+                    create_service_cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    cwd=project_root
                 )
                 
-                service_info["pid"] = process.pid
-                service_info["url"] = f"http://localhost:{port}"
-                service_info["status"] = ServiceStatus.PROCESSING
+                # Print raw output for debugging
+                print(f"Command stdout: {create_result.stdout}")
+                print(f"Command stderr: {create_result.stderr}")
+                print(f"Command return code: {create_result.returncode}")
                 
-                logger.info("Service process started", 
-                           pid=process.pid, 
-                           url=service_info['url'],
-                           service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
+                # Log the full output for debugging
+                logger.info("Backend.AI command output", 
+                           stdout=create_result.stdout,
+                           stderr=create_result.stderr,
+                           returncode=create_result.returncode)
                 
-                # Wait for process to finish
-                stdout, stderr = process.communicate()
-                
-                if process.returncode != 0:
-                    logger.error(
-                        "Service exited with error",
-                        returncode=process.returncode,
-                        stderr=stderr,
-                        stdout=stdout
-                    )
+                if create_result.returncode != 0:
+                    error_msg = f"Backend.AI service creation failed: {create_result.stderr}"
+                    logger.error("Backend.AI service creation failed",
+                               stderr=create_result.stderr,
+                               stdout=create_result.stdout,
+                               returncode=create_result.returncode)
                     service_info["status"] = ServiceStatus.ERROR
-                    service_info["error"] = stderr
-                    logger.error("Updated service info after error", 
-                               service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
+                    service_info["error"] = error_msg
+                    return
+                
+                logger.info("Backend.AI service creation output", 
+                           stdout=create_result.stdout,
+                           stderr=create_result.stderr)
+                
+                # Extract service endpoint and update service info
+                service_url = None
+                for line in create_result.stdout.split('\n'):
+                    if "Service endpoint" in line:
+                        service_url = line.split("Service endpoint:")[1].strip()
+                        break
+                
+                if service_url:
+                    service_info["url"] = service_url
+                    logger.info(f"Service {service_id} started with URL {service_url}")
                 else:
-                    logger.info("Service exited normally", stdout=stdout)
-                    service_info["status"] = ServiceStatus.READY
-                    logger.info("Updated service info after normal exit", 
-                               service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
-                    
+                    # If we couldn't extract the URL, build a default one
+                    default_url = f"https://service.backend.ai/services/{service_name}"
+                    service_info["url"] = default_url
+                    logger.warning(f"Could not extract service URL, using default: {default_url}")
+                
+                # Update status
+                service_info["status"] = ServiceStatus.READY
+                logger.info("Service started successfully", service_id=service_id)
             except Exception as e:
-                logger.error("Error in service thread", 
+                logger.error("Error in Backend.AI service creation thread", 
                             error=str(e), 
                             traceback=traceback.format_exc())
                 service_info["status"] = ServiceStatus.ERROR
                 service_info["error"] = str(e)
-                logger.error("Updated service info after exception", 
-                           service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
         # Start thread
-        thread = threading.Thread(target=start_service_thread)
+        thread = threading.Thread(target=start_backend_service_thread)
         thread.daemon = True
         thread.start()
         
-        # Wait for service to start
+        # Wait for service to start (briefly, to catch immediate failures)
         for i in range(10):
-            logger.info(f"Waiting for service to start (attempt {i+1}/10)", 
+            logger.info(f"Waiting for Backend.AI service to start (attempt {i+1}/10)", 
                        service_id=service_id, 
                        status=service_info["status"])
-            if service_info["status"] == ServiceStatus.PROCESSING:
+            if service_info["status"] == ServiceStatus.ERROR:
                 break
             await asyncio.sleep(0.5)
             
-        # Explicitly set status to PROCESSING if it's not already set
-        if service_info["status"] != ServiceStatus.PROCESSING and service_info["status"] != ServiceStatus.ERROR:
+        # Set status to PROCESSING if it's not already ERROR
+        if service_info["status"] != ServiceStatus.ERROR:
             service_info["status"] = ServiceStatus.PROCESSING
-            logger.info("Explicitly setting service status to PROCESSING", 
+            logger.info("Setting service status to PROCESSING", 
                        service_id=service_id,
                        previous_status=service_info.get("status", "None"),
                        new_status=ServiceStatus.PROCESSING)
@@ -471,6 +493,38 @@ async def start_service(service_id: str) -> Dict[str, Any]:
         }
         logger.error("Returning error info from start_service", error_info=error_info)
         return error_info
+
+
+def create_backend_scripts(service_id: str, service_dir: Path) -> None:
+    """
+    Create necessary scripts for Backend.AI service deployment.
+    
+    Args:
+        service_id: Service ID
+        service_dir: Path to service directory
+    """
+    # Create a start.sh script that Backend.AI will execute
+    start_script = service_dir / "start.sh"
+    
+    script_content = f"""#!/bin/bash
+# Start script for RAG Service {service_id}
+
+# Start the Gradio server with paths configured for Backend.AI
+python -m interfaces.cli_app.launch_gradio \\
+    --indices-path /models/RAGModelService/rag_services/{service_id}/indices \\
+    --docs-path /models/RAGModelService/rag_services/{service_id}/docs \\
+    --port 8000 \\
+    --host 0.0.0.0
+"""
+    
+    # Write the script
+    with open(start_script, "w") as f:
+        f.write(script_content)
+    
+    # Make the script executable
+    os.chmod(start_script, 0o755)
+    
+    logger.info("Created Backend.AI start script", script_path=str(start_script))
 
 
 async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
@@ -525,6 +579,7 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
             (0.7, "Creating vector index..."),
             (0.8, "Vector index created successfully"),
             (0.9, "Preparing service..."),
+            (0.95, "Creating Backend.AI service..."),
             (1.0, "Service ready to start")
         ]
         
@@ -566,13 +621,13 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
             
             return error_tuple
             
-        # Start service
-        progress(0.95, "Starting service...")
+        # Start Backend.AI service
+        progress(0.95, "Creating Backend.AI service...")
         service_info = await start_service(service_info["id"])
-        logger.info("Service info after starting service", service_info=service_info)
+        logger.info("Service info after starting Backend.AI service", service_info=service_info)
         
         if service_info.get("status") == ServiceStatus.ERROR:
-            error_msg = f"Failed to start service: {service_info.get('error', 'Unknown error')}"
+            error_msg = f"Failed to create Backend.AI service: {service_info.get('error', 'Unknown error')}"
             logger.error(error_msg, 
                         service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()},
                         error_details=service_info.get('error', 'Unknown error'))
@@ -598,7 +653,7 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
             return error_tuple
             
         # Return success only if service is actually ready
-        progress(1.0, "Service started successfully!")
+        progress(1.0, "Backend.AI service created successfully!")
         service_url = service_info.get("url", "")
         model_def_path = service_info.get("model_def_path", "")
         service_id = service_info.get("id", "")
@@ -620,7 +675,7 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         
         # Only return Success if the service is in READY, PROCESSING, or RUNNING state
         if service_status not in [ServiceStatus.READY, ServiceStatus.PROCESSING, ServiceStatus.RUNNING]:
-            error_msg = f"Service in unexpected state: {service_status}"
+            error_msg = f"Backend.AI service in unexpected state: {service_status}"
             logger.error(error_msg, service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
             
             # Log the raw values being returned to the status boxes for unexpected state
@@ -647,8 +702,8 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         logger.info("Raw values for status boxes", 
                    status_type=type("Success").__name__,
                    status_value="Success",
-                   message_type=type(f"RAG Service created and started. Service ID: {service_info['id']}").__name__,
-                   message_value=f"RAG Service created and started. Service ID: {service_info['id']}",
+                   message_type=type(f"RAG Service created with Backend.AI. Service ID: {service_info['id']}").__name__,
+                   message_value=f"RAG Service created with Backend.AI. Service ID: {service_info['id']}",
                    service_url_type=type(service_url).__name__,
                    service_url_value=service_url,
                    model_def_path_type=type(model_def_path).__name__,
@@ -657,14 +712,14 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         # Log the values being returned to the status boxes
         logger.info("Returning values to status boxes", 
                    status="Success",
-                   message=f"RAG Service created and started. Service ID: {service_info['id']}",
+                   message=f"RAG Service created with Backend.AI. Service ID: {service_info['id']}",
                    service_url=service_url,
                    model_def_path=model_def_path)
         
         # Create return tuple and log it
         return_tuple = (
             "Success", 
-            f"RAG Service created and started. Service ID: {service_info['id']}", 
+            f"RAG Service created with Backend.AI. Service ID: {service_info['id']}", 
             service_url, 
             model_def_path
         )
@@ -676,30 +731,8 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         return return_tuple
         
     except Exception as e:
-        error_message = f"Error: {str(e)}"
-        logger.error("Error creating RAG service", 
-                    error=str(e), 
-                    error_type=type(e).__name__,
-                    traceback=traceback.format_exc())
-        
-        # Log the raw values being returned to the status boxes in error case
-        logger.error("Raw error values for status boxes", 
-                   status_type=type("Error").__name__,
-                   status_value="Error",
-                   message_type=type(error_message).__name__,
-                   message_value=error_message,
-                   service_url_type=type("").__name__,
-                   service_url_value="",
-                   model_def_path_type=type("").__name__,
-                   model_def_path_value="")
-        
-        # Create error return tuple and log it
-        error_tuple = ("Error", error_message, "", "")
-        logger.error("Final error return tuple for Gradio", 
-                   return_tuple=error_tuple,
-                   tuple_type=type(error_tuple).__name__,
-                   tuple_length=len(error_tuple))
-        
+        logger.error("Error creating RAG service", error=str(e), traceback=traceback.format_exc())
+        error_tuple = ("Error", f"Error creating RAG service: {str(e)}", "", "")
         return error_tuple
 
 
