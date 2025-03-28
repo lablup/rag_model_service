@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 # Import from portal.github for backward compatibility
-from interfaces.portal.github import parse_github_url, prepare_for_rag
+from interfaces.portal.github import parse_github_url, prepare_for_rag, clone_github_repo
 
 # Import centralized GitHub utilities for direct access when needed
 from utils.github_utils import GitHubInfo
@@ -111,6 +111,24 @@ def handle_parse(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+async def async_clone_repo(github_url: str, output_dir: Path) -> Path:
+    """
+    Asynchronously clone a repository.
+    
+    Args:
+        github_url: GitHub URL
+        output_dir: Output directory
+        
+    Returns:
+        Path to documentation directory
+    """
+    try:
+        return await clone_github_repo(github_url, output_dir)
+    except Exception as e:
+        console.print(f"[bold red]Error cloning repository:[/bold red] {str(e)}")
+        raise
+
+
 def handle_clone(args: argparse.Namespace) -> None:
     """Handle clone command"""
     try:
@@ -130,10 +148,15 @@ def handle_clone(args: argparse.Namespace) -> None:
             output_dir = path_config.get_service_docs_path(path_config.service_id)
             console.print(f"Using docs path from config: [bold]{output_dir}[/bold]")
         
-        console.print(f"[bold]Cloning repository:[/bold] {args.github_url}")
+        # Parse GitHub URL to check if a specific path is provided
+        owner, repo, branch, path = parse_github_url(args.github_url)
+        if path:
+            console.print(f"[bold]Sparse cloning directory:[/bold] {path} from {owner}/{repo} repository")
+        else:
+            console.print(f"[bold]Cloning repository:[/bold] {owner}/{repo}")
         
-        # Use prepare_for_rag to clone repository
-        docs_path = prepare_for_rag(args.github_url, output_dir)
+        # Use the async clone function directly for better control
+        docs_path = asyncio.run(async_clone_repo(args.github_url, output_dir))
         
         console.print(f"[bold green]Success![/bold green] Repository cloned to {output_dir}")
         console.print(f"[bold]Documentation path:[/bold] {docs_path}")
