@@ -180,7 +180,7 @@ def generate_docs_name(owner: str, repo: str, path: Optional[str]) -> str:
         return repo_name
 
 
-def generate_model_definition(github_url: str, model_name: str, port: int, service_type: str) -> Dict:
+def generate_model_definition(github_url: str, model_name: str, port: int, service_type: str, service_id: str = None) -> Dict:
     """
     Generate a model definition for the RAG service.
     
@@ -189,6 +189,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
         model_name: Model name
         port: Port number
         service_type: Service type (gradio or fastapi)
+        service_id: Service ID (if None, will be generated from GitHub URL)
         
     Returns:
         Model definition as a dictionary
@@ -199,8 +200,10 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
     # Determine the docs path argument
     docs_path_arg = path if path else ""
     
-    # For service ID, we'll use the owner/repo format or a custom ID if provided
-    service_id = f"{owner}/{repo}"
+    # Use the provided service_id or generate one from the GitHub URL
+    if service_id is None:
+        # For backward compatibility, but this should not be used
+        service_id = f"{owner}/{repo}"
     
     # Build the service-specific paths directly
     service_dir_path = f"/models/RAGModelService/rag_services/{service_id}"

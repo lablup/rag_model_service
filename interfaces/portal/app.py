@@ -124,7 +124,8 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
             github_url=github_url,
             model_name=f"RAG Service for {github_info.repo.replace('-', ' ').replace('_', ' ').title()}",
             port=port,
-            service_type=service_type
+            service_type=service_type,
+            service_id=service_id  # Pass the service_id to use for paths
         )
         
         # Write the model definition to file
