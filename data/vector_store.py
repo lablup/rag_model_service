@@ -11,7 +11,7 @@ This module provides functionality for:
 import asyncio
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import structlog
 from langchain_community.vectorstores import FAISS
@@ -19,6 +19,7 @@ from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 
 from core.document_processor import DocumentProcessor
+from config.config import LLMConfig, RetrievalSettings, PathConfig
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -27,17 +28,47 @@ logger = structlog.get_logger()
 class VectorStore:
     """Manager for vector store operations"""
 
-    def __init__(self, docs_root: Path, indices_path: Path):
+    def __init__(
+        self, 
+        docs_root: Union[str, Path], 
+        indices_path: Union[str, Path],
+        llm_config: Optional[LLMConfig] = None,
+        retrieval_settings: Optional[RetrievalSettings] = None,
+        path_config: Optional[PathConfig] = None,
+        service_id: Optional[str] = None
+    ):
         """
         Initialize VectorStore
         
         Args:
             docs_root: Path to documentation directory
             indices_path: Path to store vector indices
+            llm_config: Optional LLM configuration for embeddings
+            retrieval_settings: Optional retrieval settings
+            path_config: Optional PathConfig instance for path resolution
+            service_id: Optional service ID for service-specific paths
         """
         self.docs_root = Path(docs_root)
         self.indices_path = Path(indices_path)
-        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        self.llm_config = llm_config
+        self.retrieval_settings = retrieval_settings
+        self.path_config = path_config
+        self.service_id = service_id
+        
+        # Initialize embeddings with configuration if provided
+        embedding_model = "text-embedding-3-small"  # Default model
+        embedding_kwargs = {}
+        
+        if llm_config:
+            # Use API key from config if available
+            if llm_config.openai_api_key:
+                embedding_kwargs["openai_api_key"] = llm_config.openai_api_key
+            
+            # Use base URL from config if available
+            if llm_config.base_url:
+                embedding_kwargs["base_url"] = llm_config.base_url
+        
+        self.embeddings = OpenAIEmbeddings(model=embedding_model, **embedding_kwargs)
         self.logger = logger.bind(component="VectorStore")
         self.index: Optional[FAISS] = None
         self.index_name = "vectorstore"
@@ -92,77 +123,43 @@ class VectorStore:
 
     async def load_index(self) -> None:
         """Load the FAISS index into memory"""
+        # Primary index path
         index_path = self.indices_path / self.index_name
         self.logger.info(f"Attempting to load index from: {index_path}")
         
-        # Try the primary path first
+        # If the primary path doesn't exist, try to resolve using PathConfig
+        if not index_path.exists() and self.path_config:
+            self.logger.info("Primary index path not found, trying to resolve using PathConfig")
+            
+            try:
+                # Try to get service-specific indices path
+                if self.service_id:
+                    resolved_path = self.path_config.get_service_indices_path(self.service_id) / self.index_name
+                    self.logger.info(f"Trying service-specific path: {resolved_path}")
+                    if resolved_path.exists():
+                        index_path = resolved_path
+                
+                # If still not found, try the default indices path
+                if not index_path.exists():
+                    resolved_path = self.path_config.indices_path / self.index_name
+                    self.logger.info(f"Trying default indices path: {resolved_path}")
+                    if resolved_path.exists():
+                        index_path = resolved_path
+                
+                # If still not found, try to resolve the path
+                if not index_path.exists():
+                    resolved_path = self.path_config.resolve_path(self.indices_path / self.index_name)
+                    self.logger.info(f"Trying resolved path: {resolved_path}")
+                    if resolved_path.exists():
+                        index_path = resolved_path
+            
+            except Exception as e:
+                self.logger.error(f"Error resolving paths: {str(e)}")
+        
+        # If index still not found, log warning and return
         if not index_path.exists():
-            self.logger.warning(f"Index directory not found at: {index_path}")
-            
-            # Check if parent directories exist
-            self.logger.info(f"Parent directory exists: {self.indices_path.exists()}")
-            
-            # List contents of parent directory if it exists
-            if self.indices_path.exists():
-                self.logger.info(f"Contents of {self.indices_path}: {list(self.indices_path.iterdir())}")
-            
-            # Try alternative paths
-            alternative_paths = []
-            
-            # Try with RAGModelService in the path
-            if "RAGModelService" not in str(index_path):
-                path_parts = str(index_path).split("/")
-                for i in range(len(path_parts)):
-                    if path_parts[i] == "rag_services" and i > 0:
-                        # Insert RAGModelService before rag_services
-                        alt_path = "/".join(path_parts[:i]) + "/RAGModelService/" + "/".join(path_parts[i:])
-                        alternative_paths.append(Path(alt_path))
-            
-            # Try without RAGModelService in the path
-            if "RAGModelService" in str(index_path):
-                alt_path = str(index_path).replace("/RAGModelService", "")
-                alternative_paths.append(Path(alt_path))
-            
-            # Try replacing GitHub owner/repo with service ID format
-            # This handles the case where paths are created with UUIDs instead of GitHub owner/repo
-            import re
-            path_str = str(index_path)
-            # Look for pattern like /models/RAGModelService/rag_services/NVIDIA/TensorRT-LLM/
-            github_pattern = r'/models/RAGModelService/rag_services/([^/]+)/([^/]+)/'
-            match = re.search(github_pattern, path_str)
-            if match:
-                # Get the service ID from environment variable
-                service_id = os.environ.get('RAG_SERVICE_PATH', '')
-                
-                # If service ID is not set, try some common service ID formats
-                if not service_id:
-                    # Try to find service ID in parent directories
-                    parent_dir = self.indices_path.parent
-                    while parent_dir and str(parent_dir) != '/':
-                        if parent_dir.name and len(parent_dir.name) == 8 and re.match(r'^[0-9a-f]+$', parent_dir.name):
-                            service_id = parent_dir.name
-                            break
-                        parent_dir = parent_dir.parent
-                
-                if service_id:
-                    # Replace GitHub owner/repo with service ID
-                    owner_repo = f"{match.group(1)}/{match.group(2)}"
-                    alt_path_str = path_str.replace(owner_repo, service_id)
-                    alternative_paths.append(Path(alt_path_str))
-                    self.logger.info(f"Adding alternative path with service ID: {alt_path_str}")
-            
-            # Check alternative paths
-            for alt_path in alternative_paths:
-                self.logger.info(f"Trying alternative path: {alt_path}")
-                if alt_path.exists():
-                    self.logger.info(f"Found index at alternative path: {alt_path}")
-                    index_path = alt_path
-                    break
-            
-            # If still not found, return
-            if not index_path.exists():
-                self.logger.warning(f"Index not found at any path. Tried: {index_path} and {alternative_paths}")
-                return
+            self.logger.warning(f"Index not found at any path: {index_path}")
+            return
         
         try:
             self.logger.info(f"Loading index from: {index_path}")
@@ -178,19 +175,25 @@ class VectorStore:
             )
 
     async def search_documents(
-        self, query: str, k: int = 5
+        self, query: str, k: Optional[int] = None
     ) -> List[Dict]:
         """
         Search documents in the index
         
         Args:
             query: Search query
-            k: Number of results to return
+            k: Number of results to return (uses retrieval_settings.max_results if not provided)
             
         Returns:
             List of document dictionaries with content, metadata, and similarity score
         """
         self.logger.info(f"Searching for query: '{query}'")
+        
+        # Use retrieval settings for max_results if available
+        if k is None and self.retrieval_settings and self.retrieval_settings.max_results:
+            k = self.retrieval_settings.max_results
+        elif k is None:
+            k = 5  # Default value
         
         if not self.index:
             self.logger.info("Index not loaded, attempting to load it now")
@@ -217,17 +220,23 @@ class VectorStore:
             self.logger.error("Search failed", error=str(e))
             raise
 
-    async def similarity_search(self, query: str, k: int = 5) -> List[Document]:
+    async def similarity_search(self, query: str, k: Optional[int] = None) -> List[Document]:
         """
         Return documents for a given search query
         
         Args:
             query: Search query
-            k: Number of results to return
+            k: Number of results to return (uses retrieval_settings.max_results if not provided)
             
         Returns:
             List of Document objects
         """
+        # Use retrieval settings for max_results if available
+        if k is None and self.retrieval_settings and self.retrieval_settings.max_results:
+            k = self.retrieval_settings.max_results
+        elif k is None:
+            k = 5  # Default value
+            
         if self.index is None:
             await self.load_index()
             if self.index is None:

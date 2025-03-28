@@ -16,11 +16,7 @@ setup(
         "python-dotenv",
     ],
     entry_points={
-        "console_scripts": [
-            "rag-vectorize=vectordb_manager.cli_vectorizer:app",
-            "rag-chat=app.rag_chatbot:main",
-            "rag-web=app.gradio_app:main",
-        ],
+        "console_scripts": [],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

@@ -21,11 +21,6 @@ from typing import Dict, Optional
 import structlog
 from dotenv import load_dotenv
 
-# Ensure project root is in path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 # Import utility modules
 from utils.github_utils import parse_github_url, validate_github_url
 from utils.service_utils import (
@@ -38,7 +33,7 @@ from utils.service_utils import (
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
 from data.vector_store import VectorStore
-from config.config import LLMConfig
+from config.config import load_config, LLMConfig, PathConfig, RetrievalSettings
 from interfaces.gradio_app.gradio_app import create_gradio_interface
 
 # Initialize logger
@@ -47,6 +42,11 @@ logger = structlog.get_logger()
 
 def parse_args():
     """Parse command line arguments."""
+    # Load configuration to use as defaults
+    config = load_config()
+    llm_config = config.llm
+    retrieval_settings = config.retrieval
+    
     parser = argparse.ArgumentParser(
         description="End-to-End RAG Service Creator"
     )
@@ -71,21 +71,29 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        help="Output directory for the RAG service",
-        default="./rag_service",
+        help="Output directory for the RAG service (default: from config)",
+        default=None,
+    )
+    
+    # Service ID
+    parser.add_argument(
+        "--service-id",
+        type=str,
+        help="Service ID for service-specific paths",
+        default=None,
     )
     
     # Server settings
     parser.add_argument(
         "--host",
         type=str,
-        help="Host for the Gradio server",
+        help=f"Host for the Gradio server (default: 0.0.0.0)",
         default="0.0.0.0",
     )
     parser.add_argument(
         "--port",
         type=int,
-        help="Port for the Gradio server",
+        help=f"Port for the Gradio server (default: 7860)",
         default=7860,
     )
     parser.add_argument(
@@ -98,20 +106,20 @@ def parse_args():
     parser.add_argument(
         "--openai-model",
         type=str,
-        help="OpenAI model to use for RAG",
-        default="gpt-4o",
+        help=f"OpenAI model to use for RAG (default: {llm_config.model_name})",
+        default=llm_config.model_name,
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        help="Temperature for LLM responses",
-        default=0.2,
+        help=f"Temperature for LLM responses (default: {llm_config.temperature})",
+        default=llm_config.temperature,
     )
     parser.add_argument(
         "--max-results",
         type=int,
-        help="Maximum number of results to retrieve",
-        default=5,
+        help=f"Maximum number of results to retrieve (default: {retrieval_settings.top_k})",
+        default=retrieval_settings.top_k,
     )
     
     # UI customization
@@ -150,7 +158,7 @@ def parse_args():
     return parser.parse_args()
 
 
-async def launch_service(docs_path: Path, indices_path: Path, config: Dict) -> None:
+async def launch_service(docs_path: Path, indices_path: Path, config: Dict, service_id: Optional[str] = None) -> None:
     """
     Launch RAG service with Gradio interface.
     
@@ -158,18 +166,16 @@ async def launch_service(docs_path: Path, indices_path: Path, config: Dict) -> N
         docs_path: Path to documentation
         indices_path: Path to vector indices
         config: Service configuration
+        service_id: Optional service ID for service-specific paths
     """
     try:
-        # Initialize VectorStore
-        vector_store = VectorStore(docs_path, indices_path)
+        # Load configuration
+        app_config = load_config()
+        path_config = app_config.paths
         
-        # Load vector indices
-        await vector_store.load_index()
-        
-        if not vector_store.index:
-            logger.error("Failed to load vector index", indices_path=str(indices_path))
-            print(f"Error: Failed to load vector index from {indices_path}")
-            return
+        # Update service_id if provided
+        if service_id:
+            path_config.service_id = service_id
         
         # Initialize LLMConfig
         llm_config = LLMConfig(
@@ -179,6 +185,30 @@ async def launch_service(docs_path: Path, indices_path: Path, config: Dict) -> N
             max_tokens=1024,
             streaming=True
         )
+        
+        # Initialize retrieval settings
+        retrieval_settings = RetrievalSettings(
+            top_k=config["llm"]["max_results"],
+            score_threshold=0.0
+        )
+        
+        # Initialize VectorStore with configuration
+        vector_store = VectorStore(
+            docs_root=docs_path, 
+            indices_path=indices_path,
+            llm_config=llm_config,
+            retrieval_settings=retrieval_settings,
+            path_config=path_config,
+            service_id=service_id
+        )
+        
+        # Load vector indices
+        await vector_store.load_index()
+        
+        if not vector_store.index:
+            logger.error("Failed to load vector index", indices_path=str(indices_path))
+            print(f"Error: Failed to load vector index from {indices_path}")
+            return
         
         # Initialize LLMInterface
         llm_interface = LLMInterface(llm_config)
@@ -226,6 +256,15 @@ async def main() -> int:
         # Parse arguments
         args = parse_args()
         
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
+        
+        # Update service_id if provided
+        if args.service_id:
+            path_config.service_id = args.service_id
+            print(f"Using service ID: {args.service_id}")
+        
         # Validate GitHub URL
         if not validate_github_url(args.github_url):
             logger.error("Invalid GitHub URL", url=args.github_url)
@@ -238,10 +277,19 @@ async def main() -> int:
             print("Error: Failed to set up environment")
             return 1
         
+        # Resolve output directory
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            print(f"Using provided output directory: {output_dir}")
+        else:
+            # Use the service directory from config
+            output_dir = path_config.get_service_docs_path("rag_services")
+            print(f"Using default output directory from config: {output_dir}")
+        
         # Create service configuration
         service_config = create_service_config(
             github_url=args.github_url,
-            output_dir=args.output_dir,
+            output_dir=str(output_dir),
             server_config={
                 "host": args.host,
                 "port": args.port,
@@ -278,7 +326,7 @@ async def main() -> int:
         
         # Launch the service unless skip-launch flag is set
         if not args.skip_launch:
-            await launch_service(docs_path, indices_path, service_config)
+            await launch_service(docs_path, indices_path, service_config, args.service_id)
             
         return 0
             

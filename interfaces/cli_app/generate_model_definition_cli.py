@@ -18,11 +18,6 @@ from typing import Dict, Optional
 import structlog
 from dotenv import load_dotenv
 
-# Ensure project root is in path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 # Import the model definition generator functionality
 from interfaces.portal.generate_model_definition import (
     parse_github_url,
@@ -31,6 +26,7 @@ from interfaces.portal.generate_model_definition import (
     generate_model_definition,
     write_model_definition
 )
+from config.config import load_config, PathConfig
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -38,6 +34,9 @@ logger = structlog.get_logger()
 
 def parse_args():
     """Parse command line arguments."""
+    # Load configuration to use as defaults
+    config = load_config()
+    
     parser = argparse.ArgumentParser(
         description="Generate model definition YAML for RAG service"
     )
@@ -54,8 +53,8 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        help="Output directory for the model definition file",
-        default=".",
+        help="Output directory for the model definition file (if not provided, uses config default)",
+        default=None,
     )
     
     # Service ID (optional, will be generated if not provided)
@@ -122,6 +121,10 @@ def main():
         return 1
     
     try:
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
+        
         # Parse the GitHub URL
         github_url = args.github_url
         owner, repo, branch, path = parse_github_url(github_url)
@@ -135,8 +138,16 @@ def main():
         logger.info(f"Generating model definition for {github_url}")
         model_def = generate_model_definition(github_url, model_name, args.port, args.service_type)
         
+        # Resolve output directory
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            print(f"Using provided output directory: {output_dir}")
+        else:
+            # Use the deployment directory from config
+            output_dir = path_config.base_path / "deployment" / "setup"
+            print(f"Using default output directory from config: {output_dir}")
+        
         # Create output directory if it doesn't exist
-        output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Write the model definition to YAML file

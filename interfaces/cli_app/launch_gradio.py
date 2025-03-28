@@ -27,7 +27,6 @@ Advanced Options:
 import argparse
 import asyncio
 import os
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -35,13 +34,8 @@ import structlog
 from dotenv import load_dotenv
 import gradio as gr
 
-# Ensure project root is in path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 # Import components from the refactored structure
-from config.config import LLMConfig, OpenAIConfig, RetrievalSettings
+from config.config import load_config, LLMConfig, OpenAIConfig, RetrievalSettings, PathConfig
 from core.llm import LLMInterface
 from core.retrieval import RetrievalEngine
 from core.rag_engine import RAGEngine
@@ -54,6 +48,9 @@ logger = structlog.get_logger()
 
 def parse_args():
     """Parse command line arguments."""
+    # Load configuration first to use as defaults
+    config = load_config()
+    
     parser = argparse.ArgumentParser(
         description="Gradio Server Launcher for RAG Service"
     )
@@ -62,14 +59,20 @@ def parse_args():
     parser.add_argument(
         "--indices-path",
         type=str,
-        help="Path to vector indices",
-        default="./embedding_indices",
+        help="Path to vector indices (if not provided, uses config default)",
+        default=None,
     )
     parser.add_argument(
         "--docs-path",
         type=str,
-        help="Path to documentation directory",
-        default="./github_docs",
+        help="Path to documentation directory (if not provided, uses config default)",
+        default=None,
+    )
+    parser.add_argument(
+        "--service-id",
+        type=str,
+        help="Service ID for service-specific paths",
+        default=None,
     )
     
     # Server settings
@@ -96,20 +99,20 @@ def parse_args():
     parser.add_argument(
         "--openai-model",
         type=str,
-        help="OpenAI model to use for RAG",
-        default="gpt-4o",
+        help=f"OpenAI model to use for RAG (default: {config.llm.model_name})",
+        default=None,
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        help="Temperature for LLM responses",
-        default=0.2,
+        help=f"Temperature for LLM responses (default: {config.llm.temperature})",
+        default=None,
     )
     parser.add_argument(
         "--max-results",
         type=int,
-        help="Maximum number of results to retrieve",
-        default=5,
+        help=f"Maximum number of results to retrieve (default: {config.rag.max_results})",
+        default=None,
     )
     
     # Customization
@@ -172,9 +175,28 @@ def configure_rag_system(args) -> Dict:
     Returns:
         Configuration dictionary
     """
-    # Resolve paths
-    indices_path = Path(args.indices_path).resolve()
-    docs_path = Path(args.docs_path).resolve()
+    # Load configuration
+    config = load_config()
+    path_config = config.paths
+    
+    # Update service_id if provided
+    if args.service_id:
+        path_config.service_id = args.service_id
+    
+    # Resolve paths using config if not explicitly provided
+    if args.docs_path:
+        docs_path = Path(args.docs_path).resolve()
+        print(f"Using provided docs path: {docs_path}")
+    else:
+        docs_path = path_config.get_service_docs_path(path_config.service_id)
+        print(f"Using docs path from config: {docs_path}")
+    
+    if args.indices_path:
+        indices_path = Path(args.indices_path).resolve()
+        print(f"Using provided indices path: {indices_path}")
+    else:
+        indices_path = path_config.get_service_indices_path(path_config.service_id)
+        print(f"Using indices path from config: {indices_path}")
     
     # Validate paths
     if not indices_path.exists():
@@ -190,10 +212,12 @@ def configure_rag_system(args) -> Dict:
         docs_path.mkdir(parents=True, exist_ok=True)
     
     # Create configuration dictionary
-    config = {
+    system_config = {
         "paths": {
             "indices_path": indices_path,
             "docs_path": docs_path,
+            "path_config": path_config,
+            "service_id": args.service_id or path_config.service_id,
         },
         "server": {
             "host": args.host,
@@ -201,19 +225,28 @@ def configure_rag_system(args) -> Dict:
             "share": args.share,
         },
         "llm": {
-            "model_name": args.openai_model,
-            "temperature": args.temperature,
-            "max_results": args.max_results,
-            "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
+            "model": args.openai_model or config.llm.model_name,
+            "temperature": args.temperature if args.temperature is not None else config.llm.temperature,
+            "openai_api_key": os.environ.get("OPENAI_API_KEY", config.llm.openai_api_key),
+            "openai_base_url": os.environ.get("OPENAI_BASE_URL", config.llm.openai_base_url),
+        },
+        "retrieval": {
+            "max_results": args.max_results or config.rag.max_results,
+            "max_tokens_per_doc": config.rag.max_tokens_per_doc,
+            "filter_threshold": config.rag.filter_threshold,
         },
         "ui": {
-            "title": args.title,
+            "title": args.title or "RAG Documentation Assistant",
             "description": args.description,
-            "suggested_questions": args.suggested_questions,
+            "suggested_questions": args.suggested_questions or [
+                "How do I install this project?",
+                "What are the main features?",
+                "How do I configure the system?",
+            ],
         },
     }
     
-    return config
+    return system_config
 
 
 async def initialize_server(config: Dict) -> Tuple[VectorStore, RAGEngine]:
@@ -226,49 +259,54 @@ async def initialize_server(config: Dict) -> Tuple[VectorStore, RAGEngine]:
     Returns:
         Tuple of VectorStore and RAGManager
     """
-    try:
-        # Extract paths from config
-        indices_path = config["paths"]["indices_path"]
-        docs_path = config["paths"]["docs_path"]
-        
-        # Initialize vector store
-        logger.info("Initializing vector store...")
-        vector_store = VectorStore(
-            docs_root=docs_path,
-            indices_path=indices_path
-        )
-        
-        # Load vector indices
-        logger.info("Loading vector indices...")
-        await vector_store.load_index()
-        
-        # Initialize LLM settings
-        llm_config = LLMConfig(
-            openai_api_key=config["llm"]["openai_api_key"],
-            model_name=config["llm"]["model_name"],
-            temperature=config["llm"]["temperature"],
-            streaming=True,
-            max_results=config["llm"]["max_results"],
-        )
-        
-        # Initialize retrieval settings
-        retrieval_settings = RetrievalSettings(
-            max_results=config["llm"]["max_results"],
-            docs_path=str(docs_path),
-            indices_path=str(indices_path),
-        )
-        
-        # Initialize components
-        llm_interface = LLMInterface(llm_config)
-        retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
-        rag_engine = RAGEngine(retrieval_engine, llm_interface)
-        
-        return vector_store, rag_engine
-        
-    except Exception as e:
-        logger.error("Error initializing server components", error=str(e))
-        print(f"Error initializing server components: {str(e)}")
-        return None, None
+    # Extract configuration
+    paths = config["paths"]
+    llm_config = config["llm"]
+    retrieval_config = config["retrieval"]
+    
+    # Create LLM config
+    llm_settings = LLMConfig(
+        openai_api_key=llm_config["openai_api_key"],
+        openai_base_url=llm_config["openai_base_url"],
+        model_name=llm_config["model"],
+        temperature=llm_config["temperature"],
+        streaming=True,
+    )
+    
+    # Create retrieval settings
+    retrieval_settings = RetrievalSettings(
+        max_results=retrieval_config["max_results"],
+        max_tokens_per_doc=retrieval_config["max_tokens_per_doc"],
+        filter_threshold=retrieval_config["filter_threshold"],
+        docs_path=str(paths["docs_path"]),
+        indices_path=str(paths["indices_path"]),
+    )
+    
+    # Initialize vector store
+    print(f"Initializing vector store with indices path: {paths['indices_path']}")
+    vector_store = VectorStore(
+        docs_root=paths["docs_path"],
+        indices_path=paths["indices_path"],
+        llm_config=llm_settings,
+        retrieval_settings=retrieval_settings,
+        path_config=paths["path_config"],
+        service_id=paths["service_id"]
+    )
+    
+    # Load vector index
+    print("Loading vector index...")
+    await vector_store.load_index()
+    
+    # Initialize LLM interface
+    llm_interface = LLMInterface(llm_settings)
+    
+    # Initialize retrieval engine
+    retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
+    
+    # Initialize RAG engine
+    rag_engine = RAGEngine(retrieval_engine, llm_interface)
+    
+    return vector_store, rag_engine
 
 
 def customize_gradio_interface(interface: gr.Blocks, config: Dict) -> gr.Blocks:
@@ -282,40 +320,25 @@ def customize_gradio_interface(interface: gr.Blocks, config: Dict) -> gr.Blocks:
     Returns:
         Customized Gradio interface
     """
-    # Apply title if provided
-    if config["ui"]["title"]:
-        # Find and update the title markdown
-        for component in interface.blocks.values():
-            if isinstance(component, gr.Markdown) and component.value.startswith("# "):
-                component.value = f"# {config['ui']['title']}"
+    # Extract UI configuration
+    ui_config = config["ui"]
+    
+    # Set title and description
+    if hasattr(interface, "title"):
+        interface.title = ui_config["title"]
+    
+    # Find the markdown component with the description
+    for component in interface.blocks.values():
+        if isinstance(component, gr.Markdown):
+            if "description" in component.elem_id or "header" in component.elem_id:
+                component.value = ui_config["description"]
                 break
     
-    # Apply description if provided
-    if config["ui"]["description"]:
-        # Find and update the description markdown
-        description_found = False
-        for component in interface.blocks.values():
-            if isinstance(component, gr.Markdown) and not component.value.startswith("#"):
-                component.value = config["ui"]["description"]
-                description_found = True
-                break
-        
-        if not description_found:
-            # If no description component found, add one
-            for component in interface.blocks.values():
-                if isinstance(component, gr.Markdown) and component.value.startswith("# "):
-                    # Add description after title
-                    interface.blocks.insert(
-                        list(interface.blocks.keys()).index(id(component)) + 1,
-                        gr.Markdown(config["ui"]["description"])
-                    )
-                    break
-    
-    # Apply suggested questions if provided
-    if config["ui"]["suggested_questions"]:
-        # This is more complex and would require modifying the interface structure
-        # For now, we'll just log that custom questions were provided
-        logger.info("Custom suggested questions provided", questions=config["ui"]["suggested_questions"])
+    # Find the suggested questions component
+    for component in interface.blocks.values():
+        if isinstance(component, gr.Examples) and hasattr(component, "examples"):
+            component.examples = ui_config["suggested_questions"]
+            break
     
     return interface
 
@@ -328,53 +351,47 @@ async def main() -> int:
         Exit code
     """
     try:
-        # Parse arguments
+        # Parse command line arguments
         args = parse_args()
         
-        # Setup environment
+        # Set up environment (load .env, validate required vars)
         if not setup_environment():
             return 1
         
-        # Configure RAG system
+        # Configure the RAG system
         config = configure_rag_system(args)
         
         # Initialize server components
         vector_store, rag_engine = await initialize_server(config)
         
-        if not vector_store or not rag_engine:
-            return 1
-        
         # Create Gradio interface
         interface = create_gradio_interface(
-            rag_engine=rag_engine, 
-            docs_path=config['paths']['docs_path']
+            rag_engine=rag_engine,
+            docs_path=config["paths"]["docs_path"],
+            indices_path=config["paths"]["indices_path"],
+            service_id=config["paths"]["service_id"]  # Pass service_id to create_gradio_interface
         )
         
         # Apply customization
         interface = customize_gradio_interface(interface, config)
         
-        # Launch the interface
-        print(f"\nLaunching Gradio server with {config['llm']['model_name']} for RAG...")
-        print(f"Documents path: {config['paths']['docs_path']}")
-        print(f"Vector indices path: {config['paths']['indices_path']}")
-        
-        # Set up suggested questions if provided through arguments
-        if args.suggested_questions:
-            suggestion_questions = args.suggested_questions
-            print(f"Using custom suggested questions: {suggestion_questions}")
-        
         # Launch the server
+        server_config = config["server"]
         interface.launch(
-            server_name=config["server"]["host"],
-            server_port=config["server"]["port"],
-            share=config["server"]["share"],
+            server_name=server_config["host"],
+            server_port=server_config["port"],
+            share=server_config["share"],
             debug=True,
         )
         
         return 0
         
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+        return 0
+        
     except Exception as e:
-        logger.error("Error in main function", error=str(e))
+        logger.error("Error in main function", error=str(e), exc_info=True)
         print(f"Error: {str(e)}")
         return 1
 

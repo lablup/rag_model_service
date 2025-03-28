@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
@@ -14,19 +13,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-
-# Add project root to Python path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+from dotenv import load_dotenv
 
 from core.llm import LLMInterface
 from core.retrieval import RetrievalEngine
 from core.rag_engine import RAGEngine
 from data.vector_store import VectorStore
-from config.models import LLMSettings, RetrievalSettings
+from config.config import load_config, LLMConfig, PathConfig, RetrievalSettings
 
 # Configuration
+load_dotenv()
 VALIDATE_KEY = os.getenv("VALIDATE_API_KEY", "false").lower() == "true"
 
 # --- Pydantic Models ---
@@ -150,31 +146,38 @@ app.add_middleware(
 )
 
 # Initialize components
-# Use local paths relative to the current working directory
-current_dir = Path.cwd()
-docs_path = os.getenv("DOCS_PATH", "docs")
-indices_path = os.getenv("INDICES_PATH", "embedding_indices")
-docs_root = current_dir / docs_path
-indices_root = current_dir / indices_path
+config = load_config()
+path_config = config.paths
+llm_config = config.llm
+retrieval_settings = config.retrieval
+
+# Get service ID from environment variable or use default
+service_id = os.getenv("SERVICE_ID", "fastapi")
+
+# Initialize with None, will be set during startup
 vector_store = None
 rag_engine = None
 
-print(f"Project root: {project_root}")
-print(f"Current directory: {current_dir}")
-print(f"Docs root: {docs_root}")
-print(f"Indices root: {indices_root}")
-
-# API key validator (using environment variable)
-api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", ""))
+# API key validator (using environment variable or config)
+api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", llm_config.openai_api_key))
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize components on startup"""
-    global vector_store, rag_engine, docs_root, indices_root
+    global vector_store, rag_engine
 
-    print(f"Starting up with docs_root: {docs_root}")
-    print(f"Starting up with indices_root: {indices_root}")
+    # Get paths from configuration
+    docs_root = path_config.get_service_docs_path(service_id)
+    indices_root = path_config.get_service_indices_path(service_id)
+
+    print(f"Starting up FastAPI server with configuration:")
+    print(f"Service ID: {service_id}")
+    print(f"Docs path: {docs_root}")
+    print(f"Indices path: {indices_root}")
+    print(f"LLM model: {llm_config.model_name}")
+    print(f"Temperature: {llm_config.temperature}")
+    print(f"Max results: {retrieval_settings.top_k}")
 
     # Create necessary directories if they don't exist
     try:
@@ -183,36 +186,26 @@ async def startup_event():
         print(f"Created directories successfully")
     except Exception as e:
         print(f"Error creating directories: {str(e)}")
-        # Use fallback paths in the current directory
-        docs_root = Path("./docs")
-        indices_root = Path("./embedding_indices")
-        docs_root.mkdir(exist_ok=True, parents=True)
-        indices_root.mkdir(exist_ok=True, parents=True)
-        print(f"Using fallback paths: docs_root={docs_root}, indices_root={indices_root}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to create required directories: {str(e)}"
+        )
 
-    # Initialize vector store
-    vector_store = VectorStore(docs_root=docs_root, indices_path=indices_root)
+    # Initialize vector store with configuration
+    vector_store = VectorStore(
+        docs_root=docs_root, 
+        indices_path=indices_root,
+        llm_config=llm_config,
+        retrieval_settings=retrieval_settings,
+        path_config=path_config,
+        service_id=service_id
+    )
 
     # Only load existing indices, don't recreate them
     await vector_store.load_index()
-
-    # Set up LLM settings
-    llm_settings = LLMSettings(
-        api_key=os.getenv("OPENAI_API_KEY", ""),
-        model_name=os.getenv("MODEL_NAME", "gpt-4o"),
-        temperature=float(os.getenv("TEMPERATURE", "0.2")),
-        streaming=True,
-    )
-    
-    # Set up retrieval settings
-    retrieval_settings = RetrievalSettings(
-        max_results=int(os.getenv("MAX_RESULTS", "5")),
-        docs_path=str(docs_root),
-        indices_path=str(indices_root),
-    )
     
     # Initialize components
-    llm_interface = LLMInterface(llm_settings)
+    llm_interface = LLMInterface(llm_config)
     retrieval_engine = RetrievalEngine(retrieval_settings, vector_store)
     rag_engine = RAGEngine(retrieval_engine, llm_interface)
 
@@ -333,5 +326,20 @@ async def stream_chat_completion(request: ChatCompletionRequest):
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Run the FastAPI server")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
+    parser.add_argument("--service-id", type=str, default="fastapi", help="Service ID for path resolution")
+    
+    args = parser.parse_args()
+    
+    # Update service ID from command line
+    if args.service_id:
+        service_id = args.service_id
+        print(f"Using service ID from command line: {service_id}")
+    
+    # Run the server
+    uvicorn.run(app, host=args.host, port=args.port)

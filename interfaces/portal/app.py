@@ -28,11 +28,6 @@ import structlog
 import asyncio
 import traceback
 
-# Ensure project root is in path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 # Import utility modules
 from utils.github_utils import validate_github_url, parse_github_url, GitHubInfo
 from utils.service_utils import (
@@ -44,7 +39,7 @@ from core.document_processor import DocumentProcessor
 from data.vector_store import VectorStore
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
-from config.config import LLMConfig
+from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig, ServiceConfig
 from interfaces.portal.generate_model_definition import generate_model_definition as gen_model_def
 from interfaces.portal.generate_model_definition import write_model_definition
 
@@ -101,21 +96,27 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         Path to the generated model definition file, or None if generation failed
     """
     try:
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
+        service_config = config.service
+        
         github_info = parse_github_url(github_url)
         service_id = service_dir.name
+        
+        # Update path configuration with service ID
+        path_config.service_id = service_id
         
         # Create model definition file path
         model_def_path = service_dir / f"model-definition-{service_id}.yml"
         
-        # Get environment variables or use defaults
-        backend_model_path = os.environ.get('BACKEND_MODEL_PATH', '/models')
-        rag_service_path = os.environ.get('RAG_SERVICE_PATH', 'rag_services/')
-        port = int(os.environ.get('PORT', '8000'))
-        service_type = os.environ.get('SERVICE_TYPE', 'gradio')
+        # Get configuration values
+        port = service_config.port
+        service_type = service_config.type
         
-        logger.info("Using environment variables for model definition", 
-                   backend_model_path=backend_model_path,
-                   rag_service_path=rag_service_path,
+        logger.info("Using configuration for model definition", 
+                   backend_model_path=path_config.backend_model_path,
+                   service_id=service_id,
                    port=port,
                    service_type=service_type)
         
@@ -134,8 +135,7 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         print(f"Generated model definition: {model_def_path}")
         logger.info("Generated model definition", 
                    path=str(model_def_path),
-                   backend_model_path=backend_model_path,
-                   rag_service_path=rag_service_path)
+                   service_id=service_id)
         
         return model_def_path
         
@@ -157,6 +157,12 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         Service information dictionary
     """
     try:
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
+        llm_config = config.llm
+        retrieval_settings = config.rag
+        
         # Setup environment
         setup_environment()
         
@@ -173,6 +179,9 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
                    service_dir=str(service_dir), 
                    docs_dir=str(docs_dir), 
                    indices_dir=str(indices_dir))
+        
+        # Update path configuration with service ID
+        path_config.service_id = service_id
         
         # Initialize service info
         service_info = {
@@ -221,8 +230,15 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         if progress_callback:
             progress_callback(0.4, "Repository cloned successfully")
             
-        # Initialize vector store
-        vector_store = VectorStore(docs_path, indices_dir)
+        # Initialize vector store with configuration
+        vector_store = VectorStore(
+            docs_root=docs_path, 
+            indices_path=indices_dir,
+            llm_config=llm_config,
+            retrieval_settings=retrieval_settings,
+            path_config=path_config,
+            service_id=service_id
+        )
         logger.info("Initialized vector store", docs_path=str(docs_path), indices_dir=str(indices_dir))
         
         # Report progress
@@ -307,6 +323,10 @@ async def start_service(service_id: str) -> Dict[str, Any]:
         Updated service information
     """
     try:
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
+        
         logger.info("Starting service", service_id=service_id)
         
         if service_id not in SERVICES:
@@ -344,6 +364,9 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 github_url = service_info["github_url"]
                 service_dir = Path(service_info["service_dir"])
                 
+                # Set service_id in path_config
+                path_config.service_id = service_id
+                
                 # Extract repository organization and name from GitHub URL
                 match = re.match(r'https?://github\.com/([^/]+)/([^/]+)', github_url)
                 if match:
@@ -365,11 +388,16 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                 if not model_def_path:
                     raise ValueError("Model definition path not found in service info")
                 
-                model_def_relative_path = str(model_def_path).replace(str(project_root) + "/", "")
+                # Calculate relative path using configuration system
+                config_base_path = path_config.base_path
+                model_def_relative_path = str(model_def_path).replace(str(config_base_path) + "/", "")
                 
                 logger.info("Creating Backend.AI service", 
                            service_name=service_name,
                            model_def_path=model_def_relative_path)
+                
+                # Get backend model path from configuration
+                backend_model_path = path_config.backend_model_path
                 
                 # Create Backend.AI model service with environment variables
                 create_service_cmd = [
@@ -384,6 +412,7 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     "--public",
                     "-e", f"RAG_SERVICE_NAME={service_name}",
                     "-e", f"RAG_SERVICE_PATH={service_id}",
+                    "-e", f"BACKEND_MODEL_PATH={backend_model_path}",
                     "-r", "cuda.shares=0",
                     "-r", "mem=4g",
                     "-r", "cpu=2"
@@ -400,7 +429,7 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=project_root
+                    cwd=path_config.base_path
                 )
                 
                 # Print raw output for debugging
@@ -504,16 +533,27 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
         service_id: Service ID
         service_dir: Path to service directory
     """
+    # Load configuration
+    config = load_config()
+    path_config = config.paths
+    
+    # Set service_id in path_config
+    path_config.service_id = service_id
+    
     # Create a start.sh script that Backend.AI will execute
     start_script = service_dir / "start.sh"
+    
+    # Get backend model path from configuration
+    backend_model_path = path_config.backend_model_path
     
     script_content = f"""#!/bin/bash
 # Start script for RAG Service {service_id}
 
 # Start the Gradio server with paths configured for Backend.AI
 python -m interfaces.cli_app.launch_gradio \\
-    --indices-path /models/RAGModelService/rag_services/{service_id}/indices \\
-    --docs-path /models/RAGModelService/rag_services/{service_id}/docs \\
+    --indices-path {backend_model_path}/RAGModelService/rag_services/{service_id}/indices \\
+    --docs-path {backend_model_path}/RAGModelService/rag_services/{service_id}/docs \\
+    --service-id {service_id} \\
     --port 8000 \\
     --host 0.0.0.0
 """

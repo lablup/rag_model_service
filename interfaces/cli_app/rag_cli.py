@@ -9,16 +9,11 @@ from typing import Optional
 import structlog
 from dotenv import load_dotenv
 
-# Add project root to Python path
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 from core.retrieval import RetrievalEngine
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
 from data.vector_store import VectorStore
-from config.config import LLMConfig, RetrievalSettings
+from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig
 
 logger = structlog.get_logger()
 
@@ -67,35 +62,45 @@ async def main() -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
+    # Load configuration first
+    config = load_config()
+    
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="RAG Command-line Interface")
     parser.add_argument("--docs-path", type=str, help="Path to documentation directory")
-    parser.add_argument("--indices-path", type=str, default="./embedding_indices", 
-                       help="Path to vector indices directory")
-    parser.add_argument("--model", type=str, default="gpt-4o", 
-                       help="OpenAI model to use")
-    parser.add_argument("--temperature", type=float, default=0.2, 
-                       help="Temperature for text generation")
-    parser.add_argument("--max-results", type=int, default=5, 
-                       help="Maximum number of search results to use")
-    parser.add_argument("--verbose", action="store_true", 
-                       help="Enable verbose output")
+    parser.add_argument("--indices-path", type=str, help="Path to vector indices directory")
+    parser.add_argument("--model", type=str, help=f"OpenAI model to use (default: {config.llm.model_name})")
+    parser.add_argument("--temperature", type=float, help=f"Temperature for text generation (default: {config.llm.temperature})")
+    parser.add_argument("--max-results", type=int, help=f"Maximum number of search results to use (default: {config.rag.max_results})")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--service-id", type=str, help="Service ID for service-specific paths")
     args = parser.parse_args()
     
     # Load environment variables
     load_dotenv()
     
-    # Check for OpenAI API key
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("Error: OPENAI_API_KEY environment variable is not set.")
-        print("Please set it in a .env file or as an environment variable.")
-        return 1
-    
     try:
-        # Set up paths
-        docs_path = Path(args.docs_path) if args.docs_path else Path("./docs")
-        indices_path = Path(args.indices_path)
+        # Set up paths using PathConfig
+        path_config = config.paths
+        
+        # Update service_id if provided
+        if args.service_id:
+            path_config.service_id = args.service_id
+        
+        # Resolve paths using config if not explicitly provided
+        if args.docs_path:
+            docs_path = Path(args.docs_path)
+            print(f"Using provided docs path: {docs_path}")
+        else:
+            docs_path = path_config.get_service_docs_path(path_config.service_id)
+            print(f"Using docs path from config: {docs_path}")
+        
+        if args.indices_path:
+            indices_path = Path(args.indices_path)
+            print(f"Using provided indices path: {indices_path}")
+        else:
+            indices_path = path_config.get_service_indices_path(path_config.service_id)
+            print(f"Using indices path from config: {indices_path}")
         
         # Ensure paths exist
         if not docs_path.exists():
@@ -104,27 +109,37 @@ async def main() -> int:
         # Create indices directory if it doesn't exist
         indices_path.mkdir(exist_ok=True, parents=True)
         
-        # Initialize vector store
-        vector_store = VectorStore(docs_path, indices_path)
-        
-        # Load vector index
-        print("Loading vector index...")
-        await vector_store.load_index()
-        
         # Set up LLM settings
         llm_settings = LLMConfig(
-            openai_api_key=api_key,
-            model_name=args.model,
-            temperature=args.temperature,
+            openai_api_key=os.environ.get("OPENAI_API_KEY", config.llm.openai_api_key),
+            openai_base_url=os.environ.get("OPENAI_BASE_URL", config.llm.openai_base_url),
+            model_name=args.model or config.llm.model_name,
+            temperature=args.temperature if args.temperature is not None else config.llm.temperature,
             streaming=True,
         )
         
         # Set up retrieval settings
         retrieval_settings = RetrievalSettings(
-            max_results=args.max_results,
+            max_results=args.max_results or config.rag.max_results,
+            max_tokens_per_doc=config.rag.max_tokens_per_doc,
+            filter_threshold=config.rag.filter_threshold,
             docs_path=str(docs_path),
             indices_path=str(indices_path),
         )
+        
+        # Initialize vector store with configuration
+        vector_store = VectorStore(
+            docs_root=docs_path,
+            indices_path=indices_path,
+            llm_config=llm_settings,
+            retrieval_settings=retrieval_settings,
+            path_config=path_config,
+            service_id=args.service_id or path_config.service_id
+        )
+        
+        # Load vector index
+        print("Loading vector index...")
+        await vector_store.load_index()
         
         # Initialize components
         llm_interface = LLMInterface(llm_settings)

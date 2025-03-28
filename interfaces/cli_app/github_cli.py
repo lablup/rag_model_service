@@ -20,16 +20,12 @@ import structlog
 from rich.console import Console
 from rich.panel import Panel
 
-# Add project root to path to allow imports
-project_root = Path(__file__).resolve().parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
 # Import from portal.github for backward compatibility
 from interfaces.portal.github import parse_github_url, prepare_for_rag
 
 # Import centralized GitHub utilities for direct access when needed
 from utils.github_utils import GitHubInfo
+from config.config import load_config, PathConfig
 
 # Initialize logger and console
 logger = structlog.get_logger()
@@ -38,6 +34,10 @@ console = Console()
 
 def setup_parser() -> argparse.ArgumentParser:
     """Set up command-line argument parser"""
+    # Load configuration to use as defaults
+    config = load_config()
+    path_config = config.paths
+    
     parser = argparse.ArgumentParser(
         description="GitHub CLI Tool for RAG Service",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -54,8 +54,14 @@ def setup_parser() -> argparse.ArgumentParser:
     clone_parser.add_argument(
         "--output-dir",
         "-o",
-        help="Output directory for cloned repository",
-        default="./github_docs",
+        help=f"Output directory for cloned repository (default: {path_config.docs_path})",
+        default=None,
+    )
+    clone_parser.add_argument(
+        "--service-id",
+        "-s",
+        help="Service ID for service-specific paths",
+        default=None,
     )
     
     # Prepare command
@@ -67,8 +73,14 @@ def setup_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument(
         "--output-dir",
         "-o",
-        help="Output directory for prepared repository",
-        default="./github_docs",
+        help=f"Output directory for prepared repository (default: {path_config.docs_path})",
+        default=None,
+    )
+    prepare_parser.add_argument(
+        "--service-id",
+        "-s",
+        help="Service ID for service-specific paths",
+        default=None,
     )
     
     # Parse command
@@ -102,10 +114,23 @@ def handle_parse(args: argparse.Namespace) -> None:
 def handle_clone(args: argparse.Namespace) -> None:
     """Handle clone command"""
     try:
-        console.print(f"[bold]Cloning repository:[/bold] {args.github_url}")
-        console.print(f"[bold]Output directory:[/bold] {args.output_dir}")
+        # Load configuration
+        config = load_config()
+        path_config = config.paths
         
-        output_dir = Path(args.output_dir)
+        # Update service_id if provided
+        if args.service_id:
+            path_config.service_id = args.service_id
+        
+        # Resolve output directory
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            console.print(f"Using provided output directory: [bold]{output_dir}[/bold]")
+        else:
+            output_dir = path_config.get_service_docs_path(path_config.service_id)
+            console.print(f"Using docs path from config: [bold]{output_dir}[/bold]")
+        
+        console.print(f"[bold]Cloning repository:[/bold] {args.github_url}")
         
         # Use prepare_for_rag to clone repository
         docs_path = prepare_for_rag(args.github_url, output_dir)

@@ -17,11 +17,11 @@ import yaml
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-# Ensure project root is in path
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+# Import configuration
+from config.config import load_config
 
+# Load configuration
+config = load_config()
 
 def parse_args():
     """Parse command line arguments."""
@@ -58,7 +58,7 @@ def parse_args():
         "--port",
         type=int,
         help="Port for the service",
-        default=8000,
+        default=None,
     )
     
     # Service type
@@ -67,7 +67,7 @@ def parse_args():
         type=str,
         help="Type of service (gradio or fastapi)",
         choices=["gradio", "fastapi"],
-        default="gradio",
+        default=None,
     )
     
     return parser.parse_args()
@@ -180,20 +180,31 @@ def generate_docs_name(owner: str, repo: str, path: Optional[str]) -> str:
         return repo_name
 
 
-def generate_model_definition(github_url: str, model_name: str, port: int, service_type: str, service_id: str = None) -> Dict:
+def generate_model_definition(github_url: str, model_name: str, port: int = None, service_type: str = None, service_id: str = None) -> Dict:
     """
     Generate a model definition for the RAG service.
     
     Args:
         github_url: GitHub URL
         model_name: Model name
-        port: Port number
-        service_type: Service type (gradio or fastapi)
+        port: Port number (if None, will use the value from config)
+        service_type: Service type (gradio or fastapi) (if None, will use the value from config)
         service_id: Service ID (if None, will be generated from GitHub URL)
         
     Returns:
         Model definition as a dictionary
     """
+    # Load configuration
+    config = load_config()
+    path_config = config.paths
+    
+    # Use provided values or defaults from config
+    if port is None:
+        port = config.service.port
+    
+    if service_type is None:
+        service_type = config.service.type
+    
     # Parse the GitHub URL
     owner, repo, branch, path = parse_github_url(github_url)
     
@@ -205,8 +216,12 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
         # For backward compatibility, but this should not be used
         service_id = f"{owner}/{repo}"
     
-    # Build the service-specific paths directly
-    service_dir_path = f"/models/RAGModelService/rag_services/{service_id}"
+    # Update path configuration with service ID
+    path_config.service_id = service_id
+    
+    # Build the service-specific paths using the configuration
+    backend_model_path = path_config.backend_model_path
+    service_dir_path = f"{backend_model_path}/RAGModelService/rag_services/{service_id}"
     indices_path = f"{service_dir_path}/indices"
     docs_path = f"{service_dir_path}/docs"
     
@@ -214,11 +229,13 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
     if service_type == 'gradio':
         start_command = [
             'python3',
-            '/models/RAGModelService/interfaces/cli_app/launch_gradio.py',
+            f'{backend_model_path}/RAGModelService/interfaces/cli_app/launch_gradio.py',
             '--indices-path',
             indices_path,
             '--docs-path',
             docs_path,
+            '--service-id',
+            service_id,
             '--host',
             '0.0.0.0',
             '--port',
@@ -227,11 +244,13 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
     else:  # fastapi
         start_command = [
             'python3',
-            '/models/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
+            f'{backend_model_path}/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
             '--indices-path',
             indices_path,
             '--docs-path',
             docs_path,
+            '--service-id',
+            service_id,
             '--host',
             '0.0.0.0',
             '--port',
@@ -250,7 +269,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int, servi
                         {
                             'action': 'run_command',
                             'args': {
-                                'command': ['/bin/bash', '/models/RAGModelService/deployment/scripts/setup_gradio.sh']
+                                'command': ['/bin/bash', f'{backend_model_path}/RAGModelService/deployment/scripts/setup_gradio.sh']
                             }
                         }
                     ],
