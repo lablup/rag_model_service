@@ -29,7 +29,7 @@ import asyncio
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
+import sys
 import structlog
 from dotenv import load_dotenv
 import gradio as gr
@@ -228,12 +228,12 @@ def configure_rag_system(args) -> Dict:
             "model": args.openai_model or config.llm.model_name,
             "temperature": args.temperature if args.temperature is not None else config.llm.temperature,
             "openai_api_key": os.environ.get("OPENAI_API_KEY", config.llm.openai_api_key),
-            "openai_base_url": os.environ.get("OPENAI_BASE_URL", config.llm.openai_base_url),
+            "openai_base_url": os.environ.get("OPENAI_BASE_URL", config.llm.base_url),
         },
         "retrieval": {
             "max_results": args.max_results or config.rag.max_results,
-            "max_tokens_per_doc": config.rag.max_tokens_per_doc,
-            "filter_threshold": config.rag.filter_threshold,
+            "max_tokens_per_doc": getattr(config.llm, "max_tokens_per_doc", 8000),  # Default to 8000 if not found
+            "filter_threshold": float(os.environ.get("FILTER_THRESHOLD", "0.7")),  # Default to 0.7
         },
         "ui": {
             "title": args.title or "RAG Documentation Assistant",
@@ -267,7 +267,7 @@ async def initialize_server(config: Dict) -> Tuple[VectorStore, RAGEngine]:
     # Create LLM config
     llm_settings = LLMConfig(
         openai_api_key=llm_config["openai_api_key"],
-        openai_base_url=llm_config["openai_base_url"],
+        base_url=llm_config["openai_base_url"],
         model_name=llm_config["model"],
         temperature=llm_config["temperature"],
         streaming=True,
@@ -320,25 +320,44 @@ def customize_gradio_interface(interface: gr.Blocks, config: Dict) -> gr.Blocks:
     Returns:
         Customized Gradio interface
     """
+    # Check if interface is None
+    if interface is None:
+        logger.warning("Interface is None, cannot customize")
+        return interface
+        
     # Extract UI configuration
-    ui_config = config["ui"]
+    ui_config = config.get("ui", {})
+    if not ui_config:
+        logger.warning("UI configuration is empty or missing")
+        return interface
     
-    # Set title and description
-    if hasattr(interface, "title"):
-        interface.title = ui_config["title"]
-    
-    # Find the markdown component with the description
-    for component in interface.blocks.values():
-        if isinstance(component, gr.Markdown):
-            if "description" in component.elem_id or "header" in component.elem_id:
-                component.value = ui_config["description"]
-                break
-    
-    # Find the suggested questions component
-    for component in interface.blocks.values():
-        if isinstance(component, gr.Examples) and hasattr(component, "examples"):
-            component.examples = ui_config["suggested_questions"]
-            break
+    try:
+        # Set title if available
+        if hasattr(interface, "title") and "title" in ui_config:
+            interface.title = ui_config["title"]
+            logger.debug(f"Set interface title to: {ui_config['title']}")
+        
+        # Instead of trying to modify the interface directly,
+        # we'll store the configuration so it can be accessed later
+        # during the interface rendering
+        
+        # Store the configuration in the interface for later use
+        if not hasattr(interface, "_custom_config"):
+            interface._custom_config = {}
+        
+        # Add UI configuration
+        interface._custom_config["title"] = ui_config.get("title", "RAG Documentation Assistant")
+        interface._custom_config["description"] = ui_config.get("description", "Documentation search with vector database")
+        interface._custom_config["suggested_questions"] = ui_config.get("suggested_questions", [
+            "How do I install this project?",
+            "What are the main features?",
+            "How do I configure the system?"
+        ])
+        
+        logger.debug(f"Stored custom configuration in interface: {interface._custom_config}")
+        
+    except Exception as e:
+        logger.error(f"Error customizing interface: {str(e)}")
     
     return interface
 

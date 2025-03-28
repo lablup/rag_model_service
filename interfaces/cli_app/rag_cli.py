@@ -1,4 +1,36 @@
-"""Command-line interface for RAG functionality."""
+#!/usr/bin/env python3
+"""
+RAG Command-line Interface
+
+This script provides an interactive command-line interface for the RAG system.
+It allows users to query documentation and get AI-generated responses.
+
+Features:
+1. Interactive chat mode with the RAG system
+2. Configurable LLM parameters (model, temperature)
+3. Configurable retrieval parameters (max results)
+4. Support for service-specific paths
+
+Basic Usage:
+    python rag_cli.py
+
+With Custom Paths:
+    python rag_cli.py --docs-path ./my_docs --indices-path ./my_indices
+
+With Custom Model Parameters:
+    python rag_cli.py --model gpt-4o-mini --temperature 0.3 --max-results 10
+
+With Service ID:
+    python rag_cli.py --service-id my_service_id
+
+Environment Variables:
+    OPENAI_API_KEY - OpenAI API key for LLM access
+    OPENAI_BASE_URL - Optional custom OpenAI API endpoint
+    OPENAI_MODEL - Default model to use
+    TEMPERATURE - Default temperature for text generation
+    MAX_RESULTS - Default number of search results to use
+    RAG_SERVICE_PATH - Base path for RAG services
+"""
 import asyncio
 import argparse
 import os
@@ -112,7 +144,7 @@ async def main() -> int:
         # Set up LLM settings
         llm_settings = LLMConfig(
             openai_api_key=os.environ.get("OPENAI_API_KEY", config.llm.openai_api_key),
-            openai_base_url=os.environ.get("OPENAI_BASE_URL", config.llm.openai_base_url),
+            base_url=os.environ.get("OPENAI_BASE_URL", config.llm.base_url),
             model_name=args.model or config.llm.model_name,
             temperature=args.temperature if args.temperature is not None else config.llm.temperature,
             streaming=True,
@@ -121,8 +153,8 @@ async def main() -> int:
         # Set up retrieval settings
         retrieval_settings = RetrievalSettings(
             max_results=args.max_results or config.rag.max_results,
-            max_tokens_per_doc=config.rag.max_tokens_per_doc,
-            filter_threshold=config.rag.filter_threshold,
+            max_tokens_per_doc=config.llm.max_tokens_per_doc,
+            filter_threshold=float(os.environ.get("FILTER_THRESHOLD", "0.7")),
             docs_path=str(docs_path),
             indices_path=str(indices_path),
         )
@@ -158,5 +190,11 @@ async def main() -> int:
 
 if __name__ == "__main__":
     import asyncio
+    # Set logging level to DEBUG to see all debugging information
+    import structlog
+    import logging
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
+    )
     exit_code = asyncio.run(main())
     exit(exit_code)

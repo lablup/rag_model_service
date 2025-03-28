@@ -2,10 +2,32 @@
 """
 RAG Launcher
 
-A simple script to launch the complete RAG service system.
+This script serves as the main entry point for launching the complete RAG service system.
+It can set up example repositories and start the RAG service portal.
 
-Usage:
-    python rag_launcher.py [--portal-only]
+Features:
+1. Environment validation for required dependencies
+2. Optional setup of example repositories for demonstration
+3. Launch of the RAG service portal web interface
+4. Support for service-specific configurations
+5. Configurable server parameters
+
+Basic Usage:
+    python rag_launcher.py
+
+Portal Only (Skip Example Setup):
+    python rag_launcher.py --portal-only
+
+With Custom Port:
+    python rag_launcher.py --port 8080
+
+With Service ID:
+    python rag_launcher.py --service-id my_service_id
+
+Environment Variables:
+    OPENAI_API_KEY - Required for LLM access
+    RAG_SERVICE_PATH - Base path for RAG services
+    PROJECT_PATH - Base project path
 """
 
 import argparse

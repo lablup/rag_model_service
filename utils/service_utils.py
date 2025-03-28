@@ -146,9 +146,13 @@ def create_service_config(
     output_dir = Path(output_dir).resolve()
     existing_docs_path = Path(existing_docs_path) if existing_docs_path else None
     
-    # Create paths
-    docs_dir = output_dir / f"{github_info.owner}_{github_info.repo}"
-    indices_dir = output_dir / f"{github_info.owner}_{github_info.repo}_indices"
+    # Create service ID from repository name
+    service_id = f"{github_info.owner}_{github_info.repo}"
+    
+    # Create paths following the pattern RAG_SERVICE_PATH/service_id/docs and RAG_SERVICE_PATH/service_id/indices
+    service_dir = output_dir / service_id
+    docs_dir = service_dir / "docs"
+    indices_dir = service_dir / "indices"
     
     # Create configuration objects
     paths = ServicePaths(

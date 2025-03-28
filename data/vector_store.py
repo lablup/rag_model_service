@@ -138,6 +138,7 @@ class VectorStore:
                     self.logger.info(f"Trying service-specific path: {resolved_path}")
                     if resolved_path.exists():
                         index_path = resolved_path
+                        self.logger.debug(f"Found index at service-specific path: {index_path}")
                 
                 # If still not found, try the default indices path
                 if not index_path.exists():
@@ -145,6 +146,7 @@ class VectorStore:
                     self.logger.info(f"Trying default indices path: {resolved_path}")
                     if resolved_path.exists():
                         index_path = resolved_path
+                        self.logger.debug(f"Found index at default indices path: {index_path}")
                 
                 # If still not found, try to resolve the path
                 if not index_path.exists():
@@ -152,26 +154,60 @@ class VectorStore:
                     self.logger.info(f"Trying resolved path: {resolved_path}")
                     if resolved_path.exists():
                         index_path = resolved_path
+                        self.logger.debug(f"Found index at resolved path: {index_path}")
             
             except Exception as e:
-                self.logger.error(f"Error resolving paths: {str(e)}")
+                self.logger.error(f"Error resolving paths: {str(e)}", exc_info=True)
         
         # If index still not found, log warning and return
         if not index_path.exists():
             self.logger.warning(f"Index not found at any path: {index_path}")
+            # List all files in the indices directory to help debugging
+            try:
+                self.logger.debug(f"Contents of indices directory {self.indices_path}:")
+                if self.indices_path.exists():
+                    for file in self.indices_path.iterdir():
+                        self.logger.debug(f"  - {file.name} ({file.stat().st_size} bytes)")
+                else:
+                    self.logger.debug(f"  Directory does not exist")
+            except Exception as e:
+                self.logger.error(f"Error listing indices directory: {str(e)}")
             return
         
         try:
             self.logger.info(f"Loading index from: {index_path}")
+            # Check if both required files exist
+            faiss_file = index_path / "index.faiss"
+            pkl_file = index_path / "index.pkl"
+            
+            if not faiss_file.exists() or not pkl_file.exists():
+                self.logger.warning(
+                    "Missing index files",
+                    faiss_exists=faiss_file.exists(),
+                    pkl_exists=pkl_file.exists(),
+                    path=str(index_path)
+                )
+            
             self.index = FAISS.load_local(
                 str(index_path),
                 self.embeddings,
                 allow_dangerous_deserialization=True,
             )
             self.logger.info(f"Successfully loaded index from: {index_path}")
+            
+            # Add debug info about the loaded index
+            if hasattr(self.index, 'docstore') and hasattr(self.index.docstore, '_dict'):
+                doc_count = len(self.index.docstore._dict)
+                self.logger.debug(f"Loaded index contains {doc_count} documents")
+                
+                # Sample a few document IDs for debugging
+                if doc_count > 0:
+                    sample_ids = list(self.index.docstore._dict.keys())[:3]
+                    self.logger.debug(f"Sample document IDs: {sample_ids}")
+            
         except Exception as e:
             self.logger.error(
-                "Failed to load index", error=str(e), path=str(index_path)
+                "Failed to load index", error=str(e), path=str(index_path), exc_info=True
             )
 
     async def search_documents(
@@ -195,6 +231,10 @@ class VectorStore:
         elif k is None:
             k = 5  # Default value
         
+        # Safe access to embeddings model name
+        embeddings_model = getattr(self.embeddings, 'model_name', 'unknown')
+        self.logger.debug(f"Search parameters: k={k}, embeddings_model={embeddings_model}")
+        
         if not self.index:
             self.logger.info("Index not loaded, attempting to load it now")
             await self.load_index()
@@ -207,6 +247,16 @@ class VectorStore:
             self.logger.info(f"Performing similarity search with k={k}")
             docs_with_scores = self.index.similarity_search_with_score(query, k=k)
             self.logger.info(f"Search successful, found {len(docs_with_scores)} results")
+            
+            # Debug the first few results
+            for i, (doc, score) in enumerate(docs_with_scores[:3]):
+                self.logger.debug(
+                    f"Search result {i+1}",
+                    score=score,
+                    content_preview=doc.page_content[:100] + "..." if len(doc.page_content) > 100 else doc.page_content,
+                    metadata=doc.metadata
+                )
+            
             return [
                 {
                     "content": doc.page_content,
@@ -217,7 +267,7 @@ class VectorStore:
             ]
 
         except Exception as e:
-            self.logger.error("Search failed", error=str(e))
+            self.logger.error("Search failed", error=str(e), exc_info=True)
             raise
 
     async def similarity_search(self, query: str, k: Optional[int] = None) -> List[Document]:

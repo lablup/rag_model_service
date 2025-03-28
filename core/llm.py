@@ -77,11 +77,32 @@ class LLMInterface:
             Response chunks
         """
         try:
+            # Debug context information
+            self.logger.debug(
+                "Context information",
+                context_length=len(context),
+                context_snippet=context[:100] + "..." if len(context) > 100 else context,
+                user_input=user_input
+            )
+            
             # Format context as a message
             context_msg = HumanMessage(content=f"<context>\n{context}\n</context>\n")
             
             # Get chat history
             history = self.get_chat_history()
+            self.logger.debug(
+                "Chat history information",
+                history_length=len(history),
+                messages_count=len(self.messages)
+            )
+            
+            # Debug prompt information
+            self.logger.debug(
+                "Preparing to send to LLM",
+                model=self.settings.model_name,
+                temperature=self.settings.temperature,
+                max_tokens=self.settings.max_tokens
+            )
             
             # Stream response
             response_content = ""

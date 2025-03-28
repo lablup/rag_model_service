@@ -44,6 +44,7 @@ PROJECT_PATH = Path(os.environ.get("PROJECT_PATH", str(get_default_project_path(
 BACKEND_MODEL_PATH = Path(os.environ.get("BACKEND_MODEL_PATH", "/models"))
 RAG_SERVICE_PATH = os.environ.get("RAG_SERVICE_PATH", str(PROJECT_PATH / "rag_services"))
 RAG_SERVICE_NAME = os.environ.get("RAG_SERVICE_NAME", "rag_document_service")
+INDICES_PATH = Path(os.environ.get("INDICES_PATH", str(PROJECT_PATH / "embedding_indices")))
 
 def setup_environment() -> bool:
     """

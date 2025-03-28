@@ -54,7 +54,7 @@ def setup_parser() -> argparse.ArgumentParser:
     clone_parser.add_argument(
         "--output-dir",
         "-o",
-        help=f"Output directory for cloned repository (default: {path_config.docs_path})",
+        help=f"Output directory for cloned repository (default: {path_config.get_service_docs_path()})",
         default=None,
     )
     clone_parser.add_argument(
@@ -73,7 +73,7 @@ def setup_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument(
         "--output-dir",
         "-o",
-        help=f"Output directory for prepared repository (default: {path_config.docs_path})",
+        help=f"Output directory for prepared repository (default: {path_config.get_service_docs_path()})",
         default=None,
     )
     prepare_parser.add_argument(

@@ -34,7 +34,13 @@ console = Console()
 config = load_config()
 llm_config = config.llm
 path_config = config.paths
-retrieval_settings = config.retrieval
+# Create retrieval settings from RAG config
+from config.config import RetrievalSettings
+retrieval_settings = RetrievalSettings(
+    max_results=config.rag.max_results,
+    max_tokens_per_doc=getattr(config.llm, "max_tokens_per_doc", 8000),  # Default to 8000 if not found
+    filter_threshold=float(os.environ.get("FILTER_THRESHOLD", "0.7"))
+)
 
 # Service name
 DOC_NAME = os.getenv("RAG_SERVICE_NAME", llm_config.model_name)

@@ -39,27 +39,53 @@ class RetrievalEngine:
             Tuple of (formatted context string, filtered results)
         """
         try:
+            self.logger.debug(
+                "Starting context retrieval",
+                query=query,
+                max_results=self.settings.max_results,
+                docs_path=self.settings.docs_path,
+                indices_path=self.settings.indices_path
+            )
+            
             # Search for relevant documents
             results = await self.vector_store.search_documents(
                 query=query, 
                 k=self.settings.max_results
             )
             
+            self.logger.debug(
+                "Retrieved documents from vector store",
+                result_count=len(results),
+                first_doc_snippet=results[0].get("content", "")[:100] + "..." if results else "No results"
+            )
+            
             # Filter results if a document filter is provided
             if self.document_filter:
                 filtered_results = await self.document_filter.filter_search_results(query, results)
+                self.logger.debug(
+                    "Filtered search results",
+                    original_count=len(results),
+                    filtered_count=len(filtered_results)
+                )
             else:
                 filtered_results = results
                 
             # Format context from filtered results
             context_parts = []
             
-            for doc in filtered_results:
+            for i, doc in enumerate(filtered_results):
                 # Get metadata fields safely with defaults
                 metadata = doc.get("metadata", {})
                 relative_path = metadata.get("relative_path", "unknown_path")
                 similarity_score = doc.get("similarity_score", 0.0)
                 content = doc.get("content", "")
+                
+                self.logger.debug(
+                    f"Document {i+1} details",
+                    path=relative_path,
+                    score=similarity_score,
+                    content_length=len(content)
+                )
                 
                 # Truncate content to limit tokens
                 if len(content) > self.settings.max_tokens_per_doc * 4:
@@ -74,7 +100,14 @@ class RetrievalEngine:
                 self.logger.warning("No documents passed filtering", query=query)
                 return "No relevant context found after filtering.", []
             
-            return "\n".join(context_parts), filtered_results
+            final_context = "\n".join(context_parts)
+            self.logger.debug(
+                "Final context prepared",
+                context_length=len(final_context),
+                part_count=len(context_parts)
+            )
+            
+            return final_context, filtered_results
             
         except Exception as e:
             self.logger.error("Error retrieving context", error=str(e), query=query)
