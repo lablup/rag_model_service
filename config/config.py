@@ -168,6 +168,8 @@ class PathConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """Configuration for LLM"""
+    model_config = {"protected_namespaces": ()}
+    
     openai_api_key: str = Field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
     model_name: str = Field(default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4o"))
     max_tokens: int = Field(default_factory=lambda: int(os.environ.get("MAX_TOKENS", "2048")))
@@ -204,6 +206,8 @@ class LLMConfig(BaseModel):
 
 class OpenAIConfig(BaseModel):
     """OpenAI API configuration."""
+    model_config = {"protected_namespaces": ()}
+    
     api_key: str = Field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
     model_name: str = Field(default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4o"))
     temperature: float = Field(default_factory=lambda: float(os.environ.get("TEMPERATURE", "0.2")))
@@ -211,6 +215,8 @@ class OpenAIConfig(BaseModel):
 
 class LLMSettings(BaseModel):
     """Configuration settings for LLM interface."""
+    model_config = {"protected_namespaces": ()}
+    
     openai_api_key: str = Field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
     model_name: str = Field(default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4o"))
     max_tokens: int = Field(default_factory=lambda: int(os.environ.get("MAX_TOKENS", "2048")))

@@ -36,6 +36,8 @@ class ServiceStatus:
 
 class LLMConfig(BaseModel):
     """Configuration for LLM settings"""
+    model_config = {"protected_namespaces": ()}
+    
     model_name: str = "gpt-4o"
     temperature: float = 0.2
     max_results: int = 5

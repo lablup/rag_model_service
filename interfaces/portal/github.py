@@ -43,6 +43,7 @@ def parse_github_url(github_url: str) -> Tuple[str, str, str, str]:
 async def clone_github_repo(github_url: str, target_dir: Path) -> Path:
     """
     Clone repository from GitHub URL to target directory.
+    If a specific path is provided in the GitHub URL, only that directory is cloned.
     
     Args:
         github_url: GitHub URL
@@ -67,7 +68,10 @@ async def clone_github_repo(github_url: str, target_dir: Path) -> Path:
         target_dir.mkdir(exist_ok=True, parents=True)
         
         # Clone repository using centralized utility
-        print(f"Cloning {github_info.owner}/{github_info.repo} repository...")
+        if github_info.path:
+            print(f"Sparse cloning {github_info.path} from {github_info.owner}/{github_info.repo} repository...")
+        else:
+            print(f"Cloning {github_info.owner}/{github_info.repo} repository...")
         
         docs_path, error = utils_clone_github_repo(github_info, target_dir)
         
