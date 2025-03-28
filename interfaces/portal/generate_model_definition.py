@@ -204,8 +204,8 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
         port = config.server.port if hasattr(config, 'server') else 8000
     
     if service_type is None:
-        # Default to fastapi if not specified
-        service_type = "fastapi"
+        # Default to gradio if not specified
+        service_type = "gradio"
     
     # Parse the GitHub URL
     owner, repo, branch, path = parse_github_url(github_url)

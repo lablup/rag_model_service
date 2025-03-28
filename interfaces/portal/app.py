@@ -114,7 +114,7 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         )
         
         # Define service type (not in ServerConfig)
-        service_type = "fastapi"  # Default to fastapi
+        service_type = "gradio"  # Default to gradio
         
         github_info = parse_github_url(github_url)
         service_id = service_dir.name
