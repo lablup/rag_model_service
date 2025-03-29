@@ -254,6 +254,11 @@ class RetrievalSettings(BaseModel):
         if args.get("max_results") is not None:
             self.max_results = args["max_results"]
 
+class ChunkingSettings(BaseModel):
+    """Configuration settings for chunking."""
+    chunk: bool = Field(default_factory=lambda: bool(os.environ.get("CHUNK", "true")))
+    chunk_size: int = Field(default_factory=lambda: int(os.environ.get("CHUNK_SIZE", "1000")))
+    chunk_overlap: int = Field(default_factory=lambda: int(os.environ.get("CHUNK_OVERLAP", "200")))
 
 class RAGConfig(BaseModel):
     """RAG-specific configuration."""
@@ -291,6 +296,7 @@ class AppConfig(BaseModel):
     rag: RAGConfig = Field(default_factory=RAGConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     paths: PathConfig = Field(default_factory=PathConfig)
+    chunking_settings: ChunkingSettings = Field(default_factory=ChunkingSettings)
     
     def update_from_args(self, args: Dict[str, Any]) -> None:
         """
@@ -302,6 +308,8 @@ class AppConfig(BaseModel):
         self.paths.update_from_args(args)
         self.llm.update_from_args(args)
         self.server.update_from_args(args)
+        self.rag.update_from_args(args)
+        self.chunking_settings.update_from_args(args)
 
 
 def load_config() -> AppConfig:

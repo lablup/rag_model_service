@@ -37,7 +37,7 @@ from rich.table import Table
 
 from data.vector_store import VectorStore
 from core.document_processor import DocumentProcessor
-from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig
+from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig, ChunkingSettings
 
 # Initialize logger and console
 logger = structlog.get_logger()
@@ -63,6 +63,12 @@ def process_documents(
         "--indices-path",
         "-i",
         help="Path to store vector indices (if not provided, uses config default)",
+    ),
+    chunk: bool = typer.Option(
+        True,
+        "--chunk",
+        "-c",
+        help="Whether to chunk the documents",
     ),
     chunk_size: int = typer.Option(
         1000,
@@ -149,7 +155,7 @@ def process_documents(
                 documents = await doc_processor.collect_documents(
                     directory=resolved_docs_path,
                     recursive=True,
-                    chunk=True,
+                    chunk=chunk,
                     file_filter=file_filter
                 )
                 

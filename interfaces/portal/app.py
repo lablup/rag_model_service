@@ -46,7 +46,7 @@ from core.document_processor import DocumentProcessor
 from data.vector_store import VectorStore
 from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
-from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig
+from config.config import load_config, LLMConfig, RetrievalSettings, PathConfig, ChunkingSettings
 from interfaces.portal.generate_model_definition import generate_model_definition as gen_model_def
 from interfaces.portal.generate_model_definition import write_model_definition
 
@@ -134,6 +134,9 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         # Get RAG_SERVICE_PATH from environment variable or use a default
         rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
         
+        # Get max_results from environment variable or use a default
+        max_results = os.environ.get("MAX_RESULTS", 5)
+        
         logger.info("Using configuration for model definition", 
                    backend_model_path=backend_model_path,
                    rag_service_path=rag_service_path,
@@ -166,12 +169,22 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         return None
                 
 
-async def process_github_url(github_url: str, progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+async def process_github_url(
+    github_url: str, 
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    enable_chunking: bool = True,
+    max_results: int = 5,
+    progress_callback: Optional[callable] = None
+) -> Dict[str, Any]:
     """
     Process a GitHub URL to create a RAG service using Backend.AI.
     
     Args:
         github_url: GitHub URL for documentation
+        chunk_size: Size of chunks for document splitting
+        chunk_overlap: Overlap between chunks
+        enable_chunking: Whether to enable document chunking
         progress_callback: Callback function to report progress
         
     Returns:
@@ -183,7 +196,7 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         path_config = config.paths
         llm_config = config.llm
         retrieval_settings = config.rag
-        
+        retrieval_settings.max_results = max_results
         # Setup environment
         setup_environment()
         
@@ -217,6 +230,10 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             "pid": None,
             "model_def_path": None,
             "error": None,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "enable_chunking": enable_chunking,
+            "max_results": max_results,
         }
         logger.info("Initialized service info", service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()})
         
@@ -227,8 +244,11 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
         if progress_callback:
             progress_callback(0.1, f"Created service directory: {service_dir}")
             
-        # Process GitHub URL
-        document_processor = DocumentProcessor()
+        # Process GitHub URL with custom chunking settings
+        document_processor = DocumentProcessor(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
         
         # Report progress
         if progress_callback:
@@ -258,7 +278,7 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             llm_config=llm_config,
             retrieval_settings=retrieval_settings,
             path_config=path_config,
-            service_id=service_id
+            service_id=service_id,
         )
         logger.info("Initialized vector store", docs_path=str(docs_path), indices_dir=str(indices_dir))
         
@@ -268,8 +288,16 @@ async def process_github_url(github_url: str, progress_callback: Optional[callab
             
         # Process documents and create index
         try:
-            docs = await document_processor.collect_documents(docs_path)
-            logger.info("Collected documents", docs_count=len(docs) if docs else 0)
+            # Pass the enable_chunking flag to collect_documents
+            docs = await document_processor.collect_documents(
+                docs_path, 
+                chunk=enable_chunking
+            )
+            logger.info("Collected documents", 
+                       docs_count=len(docs) if docs else 0,
+                       chunking_enabled=enable_chunking,
+                       chunk_size=chunk_size,
+                       chunk_overlap=chunk_overlap)
             
             if not docs:
                 service_info["status"] = ServiceStatus.ERROR
@@ -626,6 +654,7 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
 python -m interfaces.cli_app.launch_gradio \\
     --indices-path {backend_model_path}/RAGModelService/rag_services/{service_id}/indices \\
     --docs-path {backend_model_path}/RAGModelService/rag_services/{service_id}/docs \\
+    --max-results {max_results} \\
     --service-id {service_id} \\
     --port 8000 \\
     --host 0.0.0.0
@@ -641,12 +670,24 @@ python -m interfaces.cli_app.launch_gradio \\
     logger.info("Created Backend.AI start script", script_path=str(start_script))
 
 
-async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[str, str, str, str]:
+async def create_rag_service(
+    github_url: str, 
+    chunking_preset: str,
+    chunk_size: int, 
+    chunk_overlap: int,
+    enable_chunking: bool = True,
+    max_results: int = 5,
+    progress=gr.Progress()
+) -> Tuple[str, str, str, str]:
     """
     Create a RAG service from a GitHub URL (Gradio interface function).
     
     Args:
         github_url: GitHub URL for documentation
+        chunking_preset: Selected chunking preset (for logging only)
+        chunk_size: Size of chunks for document splitting
+        chunk_overlap: Overlap between chunks
+        enable_chunking: Whether to enable document chunking
         progress: Gradio progress tracker
         
     Returns:
@@ -656,52 +697,35 @@ async def create_rag_service(github_url: str, progress=gr.Progress()) -> Tuple[s
         # Validate GitHub URL
         if not validate_github_url(github_url):
             error_msg = "Invalid GitHub URL"
-            logger.error(error_msg, 
-                        github_url=github_url,
-                        validation_result=False)
-            
-            # Log the raw values being returned to the status boxes for validation error
-            logger.error("Raw validation error values for status boxes", 
-                       status_type=type("Error").__name__,
-                       status_value="Error",
-                       message_type=type(error_msg).__name__,
-                       message_value=error_msg,
-                       service_url_type=type("").__name__,
-                       service_url_value="",
-                       model_def_path_type=type("").__name__,
-                       model_def_path_value="")
-            
-            # Create validation error return tuple and log it
-            error_tuple = ("Error", error_msg, "", "")
-            logger.error("Validation error return tuple for Gradio", 
-                       return_tuple=error_tuple,
-                       tuple_type=type(error_tuple).__name__,
-                       tuple_length=len(error_tuple))
-            
-            return error_tuple
+            logger.error(error_msg, github_url=github_url, validation_result=False)
+            return ("Error", error_msg, "", "")
         
+        # Set the MAX_RESULTS environment variable
+        os.environ["MAX_RESULTS"] = str(max_results)
+
         # Process GitHub URL with progress tracking
         def update_progress(progress_value, description):
             progress(progress_value, description)
             
-        # Create progress steps for better visualization
-        progress_steps = [
-            (0.1, "Creating service directory..."),
-            (0.2, "Cloning GitHub repository..."),
-            (0.4, "Repository cloned successfully"),
-            (0.5, "Processing documentation..."),
-            (0.7, "Creating vector index..."),
-            (0.8, "Vector index created successfully"),
-            (0.9, "Preparing service..."),
-            (0.95, "Creating Backend.AI service..."),
-            (1.0, "Service ready to start")
-        ]
+        logger.info(
+        "RAG service settings", 
+            preset=chunking_preset, 
+            chunk_size=chunk_size, 
+            chunk_overlap=chunk_overlap, 
+            enabled=enable_chunking,
+            max_results=max_results  # Log max_results
+        )
         
-        # Start progress tracking
-        progress(0.0, "Starting RAG service creation...")
-        
-        # Process GitHub URL
-        service_info = await process_github_url(github_url, update_progress)
+        # Process GitHub URL with chunking parameters
+        service_info = await process_github_url(
+        github_url, 
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            enable_chunking=enable_chunking,
+            max_results=max_results,  # Add max_results
+            progress_callback=update_progress
+        )
+
         logger.info("Service info after processing GitHub URL", 
                    service_info={k: str(v) if isinstance(v, Path) else v for k, v in service_info.items()},
                    service_status=service_info.get("status"),
@@ -871,15 +895,10 @@ def create_interface() -> gr.Blocks:
             ## Instructions
             
             1. Enter a GitHub URL containing documentation
-            2. Click 'Create RAG Service'
-            3. Wait for the service to be created
-            4. Open the service URL to use the RAG Chatbot
-            
-            ## Examples
-            
-            - https://github.com/langchain-ai/langchain
-            - https://github.com/NVIDIA/TensorRT-LLM
-            - https://github.com/labmlai/annotated_deep_learning_paper_implementations
+            2. Configure chunking settings if needed (expand Advanced Settings)
+            3. Click 'Create RAG Service'
+            4. Wait for the service to be created
+            5. Open the service URL to use the RAG Chatbot
             """
         )
         
@@ -890,6 +909,85 @@ def create_interface() -> gr.Blocks:
             )
             create_button = gr.Button("Create RAG Service", variant="primary")
             
+        # Add advanced settings in a collapsible section
+        with gr.Accordion("Advanced Settings", open=False):
+            with gr.Row():
+                enable_chunking = gr.Checkbox(
+                    label="Enable Document Chunking", 
+                    value=True,
+                    info="Split documents into smaller chunks for better retrieval"
+                )
+            with gr.Row():
+                max_results = gr.Slider(
+                label="Number of Retrieved Chunks",
+                    minimum=1,
+                    maximum=20,
+                    value=5,
+                    step=1,
+                    info="Controls how many document chunks are retrieved for each query",
+                    interactive=True
+                )   
+            with gr.Row():
+                chunking_preset = gr.Radio(
+                    label="Chunking Strategy",
+                    choices=["Fine-grained", "Balanced", "Contextual"],
+                    value="Balanced",
+                    info="Choose how documents should be divided into chunks for retrieval",
+                    interactive=True
+                )
+            
+            with gr.Row():
+                with gr.Column():
+                    chunk_size_slider = gr.Slider(
+                        label="Chunk Size",
+                        minimum=250,
+                        maximum=4000,
+                        value=1000,
+                        step=250,
+                        info="Controls the size of each chunk (characters)",
+                        interactive=True
+                    )
+                
+                with gr.Column():
+                    chunk_overlap_slider = gr.Slider(
+                        label="Context Overlap",
+                        minimum=0,
+                        maximum=800,
+                        value=200,
+                        step=50,
+                        info="Controls how much context is shared between chunks",
+                        interactive=True
+                    )
+            
+            # Helper text explaining the chunking settings
+            gr.Markdown(
+                """
+                ### About Chunking Settings
+                
+                - **Fine-grained**: Smaller chunks (500 chars, 100 overlap) for precise answers but may miss context
+                - **Balanced**: Medium chunks (1000 chars, 200 overlap) for good balance of precision and context
+                - **Contextual**: Larger chunks (2000 chars, 400 overlap) prioritizing context at the cost of precision
+                
+                Adjust the sliders to customize your chunking strategy beyond the presets.
+                """
+            )
+            
+            # Add event handler to update sliders based on preset selection
+            def update_sliders(preset):
+                if preset == "Fine-grained":
+                    return 500, 100
+                elif preset == "Balanced":
+                    return 1000, 200
+                elif preset == "Contextual":
+                    return 2000, 400
+                return 1000, 200  # Default
+                
+            chunking_preset.change(
+                fn=update_sliders,
+                inputs=chunking_preset,
+                outputs=[chunk_size_slider, chunk_overlap_slider]
+            )
+        
         with gr.Row():
             status = gr.Textbox(
                 label="Status", 
@@ -923,7 +1021,8 @@ def create_interface() -> gr.Blocks:
         # Button click event
         create_button.click(
             create_rag_service,
-            inputs=[github_url],
+            inputs=[github_url, chunking_preset, chunk_size_slider, chunk_overlap_slider, 
+                    enable_chunking, max_results],  # Add max_results
             outputs=[status, message, service_url, model_def_path],
         )
         

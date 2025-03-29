@@ -68,7 +68,7 @@ from core.llm import LLMInterface
 from core.rag_engine import RAGEngine
 from core.retrieval import RetrievalEngine
 from data.vector_store import VectorStore
-from config.config import load_config, RetrievalSettings, LLMConfig as ConfigLLMConfig, ServerConfig as ConfigServerConfig
+from config.config import load_config, RetrievalSettings, LLMConfig as ConfigLLMConfig, ServerConfig as ConfigServerConfig, ChunkingSettings
 from interfaces.gradio_app.gradio_app import create_gradio_interface
 from core.document_processor import DocumentProcessor  # Import DocumentProcessor
 

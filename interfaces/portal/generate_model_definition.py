@@ -198,6 +198,9 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     config = load_config()
     path_config = config.paths
     
+    # Get the current MAX_RESULTS from environment
+    max_results = os.environ.get("MAX_RESULTS", "5")
+
     # Use provided values or defaults from config
     if port is None:
         # Use server config instead of service config
@@ -245,6 +248,8 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             indices_path,
             '--docs-path',
             docs_path,
+            '--max-results',
+            str(max_results),
             '--service-id',
             service_id,
             '--host',
