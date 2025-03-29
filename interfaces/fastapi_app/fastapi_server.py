@@ -27,6 +27,11 @@ Usage Examples:
 
    # With specific service ID (for path resolution)
    python interfaces/fastapi_app/fastapi_server.py --service-id my_service_id
+
+   # With custom port, host, and service paths
+   python interfaces/fastapi_app/fastapi_server.py --port 8080 --host 127.0.0.1 \
+       --docs-path rag_services/ede16665/docs \
+       --indices-path rag_services/ede16665/indices
    ```
 
 2. Make API requests:
@@ -94,14 +99,14 @@ Usage Examples:
 
 4. Using with curl:
    ```bash
-   curl -X POST http://localhost:8000/v1/chat/completions \
+   curl -X POST http://localhost:8080/v1/chat/completions \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
        "model": "gpt-4o",
        "messages": [
          {"role": "system", "content": "You are a helpful assistant with access to documentation."},
-         {"role": "user", "content": "What is TensorRT-LLM?"}
+         {"role": "user", "content": "How to install it?"}
        ],
        "temperature": 0.2
      }'
@@ -293,7 +298,12 @@ async def startup_event():
     global vector_store, rag_engine
 
     # Get paths from configuration
-    docs_root = path_config.get_service_docs_path(service_id)
+    custom_docs_path = os.environ.get("CUSTOM_DOCS_PATH")
+    if custom_docs_path:
+        docs_root = Path(custom_docs_path)
+    else:
+        docs_root = path_config.get_service_docs_path(service_id)
+    
     indices_root = path_config.get_service_indices_path(service_id)
 
     print(f"Starting up FastAPI server with configuration:")
@@ -379,7 +389,6 @@ async def create_chat_completion(
         # Estimate token usage (this is approximate)
         prompt_tokens = len(str(request.messages)) // 4
         completion_tokens = len(response_content) // 4
-
         return ChatCompletionResponse(
             model=request.model,
             choices=[choice],
@@ -449,22 +458,67 @@ async def stream_chat_completion(request: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-if __name__ == "__main__":
-    import uvicorn
-    import argparse
-    
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Run the FastAPI server")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
-    parser.add_argument("--service-id", type=str, default="fastapi", help="Service ID for path resolution")
-    
-    args = parser.parse_args()
-    
-    # Update service ID from command line
-    if args.service_id:
-        service_id = args.service_id
-        print(f"Using service ID from command line: {service_id}")
-    
+import uvicorn
+import typer
+from typing import Optional
+
+cli = typer.Typer()
+
+
+@cli.command()
+def main(
+    service_id: Optional[str] = typer.Option(None, "--service-id", help="Service ID for path resolution"),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to the config file"),
+    env_file: Optional[str] = typer.Option(None, "--env-file", help="Path to the .env file"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host for the server"),
+    port: int = typer.Option(8000, "--port", help="Port for the server"),
+    indices_path: Optional[str] = typer.Option(None, "--indices-path", help="Path to the indices directory"),
+    docs_path: Optional[str] = typer.Option(None, "--docs-path", help="Path to the documents directory"),
+    max_results: Optional[int] = typer.Option(None, "--max-results", help="Maximum number of results to return"),
+):
+    """FastAPI server for RAG Model Service"""
+    print(f"Starting server with service_id: {service_id}, config: {config}, env_file: {env_file}, indices_path: {indices_path}, docs_path: {docs_path}, max_results: {max_results}")
+
+    # Load environment variables from .env file if provided
+    if env_file:
+        load_dotenv(env_file)
+    else:
+        load_dotenv()  # Load default .env file
+
+    # Set service_id in environment if provided
+    if service_id:
+        os.environ["SERVICE_ID"] = service_id
+        
+    # Update path configuration with command-line arguments
+    if docs_path or indices_path or service_id or max_results:
+        # Create args dictionary for PathConfig.update_from_args
+        args = {}
+        if service_id:
+            args["service_id"] = service_id
+        if indices_path:
+            args["indices_path"] = indices_path
+        if docs_path:
+            # PathConfig doesn't have docs_path field, but we can set it as a custom arg
+            args["docs_path"] = docs_path
+        
+        # Update the path_config with the args
+        path_config.update_from_args(args)
+        
+        # If docs_path is provided, we need to handle it specially
+        if docs_path:
+            # Store the docs_path for use in startup_event
+            os.environ["CUSTOM_DOCS_PATH"] = docs_path
+        
+        # Update retrieval settings if max_results is provided
+        if max_results:
+            retrieval_settings.max_results = max_results
+
+    # Initialize components on startup
+    startup_event()
+
     # Run the server
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    cli()
