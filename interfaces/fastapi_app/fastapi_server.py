@@ -138,6 +138,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
 from core.llm import LLMInterface
 from core.retrieval import RetrievalEngine
@@ -258,43 +259,11 @@ class APIKeyValidator:
 
 # --- FastAPI Application ---
 
-app = FastAPI(title="RAG OpenAI Compatible API")
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize components
-config = load_config()
-path_config = config.paths
-llm_config = config.llm
-
-# Get service ID from environment variable or use default
-service_id = os.getenv("SERVICE_ID", "fastapi")
-
-# Create retrieval settings from RAG config
-retrieval_settings = RetrievalSettings(
-    max_results=config.rag.max_results,
-    max_tokens_per_doc=llm_config.max_tokens_per_doc,
-    service_id=service_id
-)
-
-# Initialize with None, will be set during startup
-vector_store = None
-rag_engine = None
-
-# API key validator (using environment variable or config)
-api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", llm_config.openai_api_key))
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize components on startup"""
+# Define lifespan context manager for startup/shutdown events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI application"""
+    # Initialize components on startup
     global vector_store, rag_engine
 
     # Get paths from configuration
@@ -345,6 +314,47 @@ async def startup_event():
     rag_engine = RAGEngine(retrieval_engine, llm_interface)
 
     print("Startup complete - Ready to handle requests")
+    
+    # Yield control back to FastAPI
+    yield
+    
+    # Cleanup on shutdown (if needed)
+    print("Shutting down FastAPI server...")
+
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="RAG OpenAI Compatible API", lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize components
+config = load_config()
+path_config = config.paths
+llm_config = config.llm
+
+# Get service ID from environment variable or use default
+service_id = os.getenv("SERVICE_ID", "fastapi")
+
+# Create retrieval settings from RAG config
+retrieval_settings = RetrievalSettings(
+    max_results=config.rag.max_results,
+    max_tokens_per_doc=llm_config.max_tokens_per_doc,
+    service_id=service_id
+)
+
+# Initialize with None, will be set during startup
+vector_store = None
+rag_engine = None
+
+# API key validator (using environment variable or config)
+api_key_validator = APIKeyValidator(os.getenv("OPENAI_API_KEY", llm_config.openai_api_key))
 
 
 @app.get("/v1/models", response_model=ModelList)
@@ -513,8 +523,8 @@ def main(
         if max_results:
             retrieval_settings.max_results = max_results
 
-    # Initialize components on startup
-    startup_event()
+    # No need to call startup_event() directly anymore as it's handled by the lifespan context manager
+    # startup_event()
 
     # Run the server
     uvicorn.run(app, host=host, port=port)
