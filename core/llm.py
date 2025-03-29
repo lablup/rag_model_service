@@ -25,6 +25,7 @@ class LLMInterface:
         # Initialize ChatOpenAI
         self.llm = ChatOpenAI(
             openai_api_key=settings.openai_api_key,
+            base_url=settings.base_url,
             model_name=settings.model_name,
             temperature=settings.temperature,
             streaming=settings.streaming,

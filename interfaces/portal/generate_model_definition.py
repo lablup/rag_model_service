@@ -200,6 +200,8 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     
     # Get the current MAX_RESULTS from environment
     max_results = os.environ.get("MAX_RESULTS", "5")
+    base_model_name = os.environ.get("BASE_MODEL_NAME", config.llm.model_name)
+    base_url = os.environ.get("BASE_URL", config.llm.base_url)
 
     # Use provided values or defaults from config
     if port is None:
@@ -250,6 +252,10 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             docs_path,
             '--max-results',
             str(max_results),
+            '--base_model_name',
+            base_model_name,
+            '--base_url',
+            base_url,
             '--service-id',
             service_id,
             '--host',

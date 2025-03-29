@@ -172,6 +172,8 @@ async def process_github_url(
     chunk_overlap: int = 200,
     enable_chunking: bool = True,
     max_results: int = 5,
+    base_model_name: str = 'gpt-4o',
+    base_url: str = 'https://api.openai.com/v1',
     progress_callback: Optional[callable] = None
 ) -> Dict[str, Any]:
     """
@@ -197,7 +199,6 @@ async def process_github_url(
 
         # Get max_results from environment variable or use a default
         max_results = os.environ.get("MAX_RESULTS", max_results)
-        
         # Setup environment
         setup_environment()
         
@@ -639,6 +640,8 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
     config = load_config()
     path_config = config.paths
     max_results = os.environ.get("MAX_RESULTS") or "5"
+    base_url = os.environ.get("BASE_URL") or "https://api.openai.com/v1"
+    base_model_name = os.environ.get("BASE_MODEL_NAME") or "gpt-4o"
     # Set service_id in path_config
     path_config.service_id = service_id 
     
@@ -655,6 +658,8 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
 python -m interfaces.cli_app.launch_gradio \\
     --indices-path {backend_model_path}/RAGModelService/rag_services/{service_id}/indices \\
     --docs-path {backend_model_path}/RAGModelService/rag_services/{service_id}/docs \\
+    --base_model_name {base_model_name} \\
+    --base_url {base_url} \\
     --max-results {max_results} \\
     --service-id {service_id} \\
     --port 8000 \\
@@ -678,6 +683,8 @@ async def create_rag_service(
     chunk_overlap: int,
     enable_chunking: bool = True,
     max_results: int = 5,
+    base_url: str = "https://api.openai.com/v1",
+    base_model_name: str = "gpt-4o",
     progress=gr.Progress()
 ) -> Tuple[str, str, str, str]:
     """
@@ -690,6 +697,8 @@ async def create_rag_service(
         chunk_overlap: Overlap between chunks
         enable_chunking: Whether to enable document chunking
         progress: Gradio progress tracker
+        base_url: Base URL for the API endpoint
+        base_model_name: Base model name for the LLM
         
     Returns:
         Tuple of (status, message, url, model_definition_path) for the Gradio interface
@@ -703,6 +712,9 @@ async def create_rag_service(
         
         # Set the MAX_RESULTS environment variable
         os.environ["MAX_RESULTS"] = str(max_results)
+        os.environ["BASE_MODEL_NAME"] = base_model_name
+        os.environ["BASE_URL"] = base_url
+        
 
         # Process GitHub URL with progress tracking
         def update_progress(progress_value, description):
@@ -714,7 +726,9 @@ async def create_rag_service(
             chunk_size=chunk_size, 
             chunk_overlap=chunk_overlap, 
             enabled=enable_chunking,
-            max_results=max_results  # Log max_results
+            max_results=max_results,  # Log max_results
+            base_url=base_url,
+            base_model_name=base_model_name
         )
         
         # Process GitHub URL with chunking parameters
@@ -723,7 +737,9 @@ async def create_rag_service(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             enable_chunking=enable_chunking,
-            max_results=max_results,  # Add max_results
+            max_results=max_results, 
+            base_model_name=base_model_name,
+            base_url=base_url,
             progress_callback=update_progress
         )
 
@@ -960,6 +976,18 @@ def create_interface() -> gr.Blocks:
                         interactive=True
                     )
             
+            with gr.Row():
+                base_url = gr.Textbox(
+                    label='Base URL',
+                    value='https://qwen_qwq_32b.asia03.app.backend.ai/',
+                    placeholder='Enter the base URL for the API endpoint'
+                )
+                base_model_name = gr.Textbox(
+                    label='Base Model Name',
+                    value='QwQ-32B',
+                    placeholder='Enter the base model name for the LLM'
+                )
+            
             # Helper text explaining the chunking settings
             gr.Markdown(
                 """
@@ -1023,7 +1051,7 @@ def create_interface() -> gr.Blocks:
         create_button.click(
             create_rag_service,
             inputs=[github_url, chunking_preset, chunk_size_slider, chunk_overlap_slider, 
-                    enable_chunking, max_results],  # Add max_results
+                    enable_chunking, max_results, base_url, base_model_name],
             outputs=[status, message, service_url, model_def_path],
         )
         

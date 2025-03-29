@@ -136,6 +136,20 @@ def parse_args():
         default=None,
     )
     
+    # Base URL and model name
+    parser.add_argument(
+        '--base_url',
+        type=str,
+        default='http://localhost:8000',
+        help='Base URL for the API endpoint'
+    )
+    parser.add_argument(
+        '--base_model_name', 
+        type=str,
+        default='gpt-4o',
+        help='Base model name to use for the LLM'
+    )
+    
     return parser.parse_args()
 
 
@@ -182,6 +196,13 @@ def configure_rag_system(args) -> Dict:
     # Update service_id if provided
     if args.service_id:
         path_config.service_id = args.service_id
+    
+    # Update LLM configuration with base model name
+    if args.base_model_name:
+        config.llm.model_name = args.base_model_name
+    
+    if args.base_url:
+        config.llm.base_url = args.base_url
     
     # Resolve paths using config if not explicitly provided
     if args.docs_path:
@@ -241,7 +262,7 @@ def configure_rag_system(args) -> Dict:
             "suggested_questions": args.suggested_questions or [
                 "How do I install this project?",
                 "What are the main features?",
-                "How do I configure the system?",
+                "How do I configure the system?"
             ],
         },
     }
