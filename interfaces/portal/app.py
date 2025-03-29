@@ -329,7 +329,7 @@ async def process_github_url(
         # Generate model definition
         model_def_path = None
         try:
-            model_def_path = generate_model_definition(github_url, service_dir, service_type="Gradio UI")
+            model_def_path = generate_model_definition(github_url, service_dir, service_type)
             if model_def_path:
                 logger.info("Generated model definition", path=str(model_def_path))
             else:
