@@ -905,7 +905,7 @@ def create_interface() -> gr.Blocks:
     with blocks as interface:
         gr.Markdown(
             """
-            # RAG Service Creator
+            # DosiRAG
             
             Create a RAG (Retrieval-Augmented Generation) service from a GitHub repository containing documentation.
             
