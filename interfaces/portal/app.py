@@ -134,9 +134,6 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
         # Get RAG_SERVICE_PATH from environment variable or use a default
         rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
         
-        # Get max_results from environment variable or use a default
-        max_results = os.environ.get("MAX_RESULTS", 5)
-        
         logger.info("Using configuration for model definition", 
                    backend_model_path=backend_model_path,
                    rag_service_path=rag_service_path,
@@ -197,6 +194,10 @@ async def process_github_url(
         llm_config = config.llm
         retrieval_settings = config.rag
         retrieval_settings.max_results = max_results
+
+        # Get max_results from environment variable or use a default
+        max_results = os.environ.get("MAX_RESULTS", max_results)
+        
         # Setup environment
         setup_environment()
         
@@ -637,9 +638,9 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
     # Load configuration
     config = load_config()
     path_config = config.paths
-    max_results = os.environ.get("MAX_RESULTS", "5")
+    max_results = os.environ.get("MAX_RESULTS") or "5"
     # Set service_id in path_config
-    path_config.service_id = service_id
+    path_config.service_id = service_id 
     
     # Create a start.sh script that Backend.AI will execute
     start_script = service_dir / "start.sh"
