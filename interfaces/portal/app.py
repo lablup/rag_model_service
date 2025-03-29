@@ -637,7 +637,7 @@ def create_backend_scripts(service_id: str, service_dir: Path) -> None:
     # Load configuration
     config = load_config()
     path_config = config.paths
-    
+    max_results = os.environ.get("MAX_RESULTS", "5")
     # Set service_id in path_config
     path_config.service_id = service_id
     
