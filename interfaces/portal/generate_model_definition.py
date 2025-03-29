@@ -66,7 +66,7 @@ def parse_args():
         "--service-type",
         type=str,
         help="Type of service (gradio or fastapi)",
-        choices=["gradio", "fastapi"],
+        choices=["gradio", "fastapi", "Gradio UI", "FastAPI Server"],
         default=None,
     )
     
@@ -242,7 +242,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     docs_path = f"{service_dir_path}/docs"
     
     # Determine the start command based on service type
-    if service_type == 'gradio':
+    if service_type in ['gradio', 'Gradio UI']:
         start_command = [
             'python3',
             f'{backend_model_path}/RAGModelService/interfaces/cli_app/launch_gradio.py',
@@ -263,7 +263,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             '--port',
             str(port)
         ]
-    else:  # fastapi
+    elif service_type in ['fastapi', 'FastAPI Server']:  # fastapi
         start_command = [
             'python3',
             f'{backend_model_path}/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
@@ -293,7 +293,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
                         {
                             'action': 'run_command',
                             'args': {
-                                'command': ['/bin/bash', f'{backend_model_path}/RAGModelService/deployment/scripts/setup_{"gradio" if service_type == "gradio" else "fastapi"}.sh']
+                                'command': ['/bin/bash', f'{backend_model_path}/RAGModelService/deployment/scripts/setup_{"gradio" if service_type in ["gradio", "Gradio UI"] else "fastapi"}.sh']
                             }
                         }
                     ],
