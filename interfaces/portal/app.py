@@ -91,13 +91,14 @@ def create_service_directory(service_id: str) -> Path:
     return service_dir
 
 
-def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Path]:
+def generate_model_definition(github_url: str, service_dir: Path, service_type: str = "Gradio UI") -> Optional[Path]:
     """
     Generate a model definition YAML file for the RAG service.
     
     Args:
         github_url: GitHub URL for documentation
         service_dir: Path to the service directory
+        service_type: Type of RAG service to create (Gradio UI or FastAPI Server)
         
     Returns:
         Path to the generated model definition file, or None if generation failed
@@ -113,8 +114,8 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
             port=config.server.port
         )
         
-        # Define service type (not in ServerConfig)
-        service_type = "gradio"  # Default to gradio
+        # Define service type based on the radio button selection
+        service_type_value = "gradio" if service_type == "Gradio UI" else "fastapi"
         
         github_info = parse_github_url(github_url)
         service_id = service_dir.name
@@ -139,14 +140,14 @@ def generate_model_definition(github_url: str, service_dir: Path) -> Optional[Pa
                    rag_service_path=rag_service_path,
                    service_id=service_id,
                    port=port,
-                   service_type=service_type)
+                   service_type=service_type_value)
         
         # Use the imported function to generate the model definition
         model_definition = gen_model_def(
             github_url=github_url,
             model_name=f"RAG Service for {github_info.repo.replace('-', ' ').replace('_', ' ').title()}",
             port=port,
-            service_type=service_type,
+            service_type=service_type_value,
             service_id=service_id  # Pass the service_id to use for paths
         )
         
@@ -326,8 +327,15 @@ async def process_github_url(
             return service_info
             
         # Generate model definition
-        model_def_path = generate_model_definition(github_url, service_dir)
-        logger.info("Generated model definition", model_def_path=str(model_def_path) if model_def_path else None)
+        model_def_path = None
+        try:
+            model_def_path = generate_model_definition(github_url, service_dir, service_type="Gradio UI")
+            if model_def_path:
+                logger.info("Generated model definition", path=str(model_def_path))
+            else:
+                logger.warning("Failed to generate model definition")
+        except Exception as e:
+            logger.error("Error generating model definition", error=str(e))
         
         if model_def_path:
             # Make sure to update the service_info with the model definition path
@@ -367,12 +375,13 @@ async def process_github_url(
         return error_info
 
 
-async def start_service(service_id: str) -> Dict[str, Any]:
+async def start_service(service_id: str, service_type: str = "Gradio UI") -> Dict[str, Any]:
     """
     Start a RAG service as a Backend.AI model service.
     
     Args:
         service_id: Service ID
+        service_type: Type of RAG service to create (Gradio UI or FastAPI Server)
         
     Returns:
         Updated service information
@@ -467,7 +476,7 @@ async def start_service(service_id: str) -> Dict[str, Any]:
                     if not model_def_path:
                         try:
                             logger.info("Attempting to regenerate model definition", github_url=service_info["github_url"])
-                            regenerated_path = generate_model_definition(service_info["github_url"], service_dir)
+                            regenerated_path = generate_model_definition(service_info["github_url"], service_dir, service_type)
                             if regenerated_path:
                                 model_def_path = str(regenerated_path)
                                 service_info["model_def_path"] = model_def_path
@@ -685,6 +694,7 @@ async def create_rag_service(
     max_results: int = 5,
     base_url: str = "https://api.openai.com/v1",
     base_model_name: str = "gpt-4o",
+    service_type: str = "Gradio UI",
     progress=gr.Progress()
 ) -> Tuple[str, str, str, str]:
     """
@@ -699,6 +709,7 @@ async def create_rag_service(
         progress: Gradio progress tracker
         base_url: Base URL for the API endpoint
         base_model_name: Base model name for the LLM
+        service_type: Type of RAG service to create (Gradio UI or FastAPI Server)
         
     Returns:
         Tuple of (status, message, url, model_definition_path) for the Gradio interface
@@ -728,7 +739,8 @@ async def create_rag_service(
             enabled=enable_chunking,
             max_results=max_results,  # Log max_results
             base_url=base_url,
-            base_model_name=base_model_name
+            base_model_name=base_model_name,
+            service_type=service_type
         )
         
         # Process GitHub URL with chunking parameters
@@ -778,7 +790,7 @@ async def create_rag_service(
             
         # Start Backend.AI service
         progress(0.95, "Creating Backend.AI service...")
-        service_info = await start_service(service_info["id"])
+        service_info = await start_service(service_info["id"], service_type=service_type)
         logger.info("Service info after starting Backend.AI service", service_info=service_info)
         
         if service_info.get("status") == ServiceStatus.ERROR:
@@ -988,6 +1000,15 @@ def create_interface() -> gr.Blocks:
                     placeholder='Enter the base model name for the LLM'
                 )
             
+            with gr.Row():
+                service_type = gr.Radio(
+                    label="Service Type",
+                    choices=["Gradio UI", "FastAPI Server"],
+                    value="Gradio UI",
+                    info="Choose the type of RAG service to create",
+                    interactive=True
+                )
+            
             # Helper text explaining the chunking settings
             gr.Markdown(
                 """
@@ -1051,7 +1072,7 @@ def create_interface() -> gr.Blocks:
         create_button.click(
             create_rag_service,
             inputs=[github_url, chunking_preset, chunk_size_slider, chunk_overlap_slider, 
-                    enable_chunking, max_results, base_url, base_model_name],
+                    enable_chunking, max_results, base_url, base_model_name, service_type],
             outputs=[status, message, service_url, model_def_path],
         )
         

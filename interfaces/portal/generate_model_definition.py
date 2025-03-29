@@ -271,6 +271,8 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             indices_path,
             '--docs-path',
             docs_path,
+            '--max-results',
+            str(max_results),
             '--service-id',
             service_id,
             '--host',
@@ -291,7 +293,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
                         {
                             'action': 'run_command',
                             'args': {
-                                'command': ['/bin/bash', f'{backend_model_path}/RAGModelService/deployment/scripts/setup_gradio.sh']
+                                'command': ['/bin/bash', f'{backend_model_path}/RAGModelService/deployment/scripts/setup_{"gradio" if service_type == "gradio" else "fastapi"}.sh']
                             }
                         }
                     ],
