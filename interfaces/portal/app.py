@@ -979,7 +979,7 @@ def create_interface() -> gr.Blocks:
             with gr.Row():
                 base_url = gr.Textbox(
                     label='Base URL',
-                    value='https://qwen_qwq_32b.asia03.app.backend.ai/',
+                    value='https://qwen_qwq_32b.asia03.app.backend.ai/v1',
                     placeholder='Enter the base URL for the API endpoint'
                 )
                 base_model_name = gr.Textbox(

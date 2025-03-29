@@ -64,10 +64,6 @@ class VectorStore:
             if llm_config.openai_api_key:
                 embedding_kwargs["openai_api_key"] = llm_config.openai_api_key
             
-            # Use base URL from config if available
-            if llm_config.base_url:
-                embedding_kwargs["base_url"] = llm_config.base_url
-        
         self.embeddings = OpenAIEmbeddings(model=embedding_model, **embedding_kwargs)
         self.logger = logger.bind(component="VectorStore")
         self.index: Optional[FAISS] = None
