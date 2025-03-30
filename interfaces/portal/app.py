@@ -175,6 +175,7 @@ async def process_github_url(
     max_results: int = 5,
     base_model_name: str = 'gpt-4o',
     base_url: str = 'https://api.openai.com/v1',
+    service_type: str = 'Gradio UI',
     progress_callback: Optional[callable] = None
 ) -> Dict[str, Any]:
     """
@@ -185,6 +186,10 @@ async def process_github_url(
         chunk_size: Size of chunks for document splitting
         chunk_overlap: Overlap between chunks
         enable_chunking: Whether to enable document chunking
+        max_results: Number of chunks to retrieve for each query
+        base_model_name: Base model name for the LLM
+        base_url: Base URL for the API endpoint
+        service_type: Type of RAG service to create (Gradio UI or FastAPI Server)
         progress_callback: Callback function to report progress
         
     Returns:
@@ -752,6 +757,7 @@ async def create_rag_service(
             max_results=max_results, 
             base_model_name=base_model_name,
             base_url=base_url,
+            service_type=service_type,
             progress_callback=update_progress
         )
 
@@ -908,6 +914,7 @@ def create_interface() -> gr.Blocks:
     # Configure blocks with queue enabled for progress tracking
     blocks = gr.Blocks(
         title="RAG Service Creator", 
+        theme=gr.themes.Base(),
         analytics_enabled=False,
     )
     
@@ -915,6 +922,7 @@ def create_interface() -> gr.Blocks:
     blocks.queue()
     
     with blocks as interface:
+        
         gr.Markdown(
             """
             # DosiRAG
@@ -1038,42 +1046,55 @@ def create_interface() -> gr.Blocks:
                 outputs=[chunk_size_slider, chunk_overlap_slider]
             )
         
+        # Create a consolidated status box
         with gr.Row():
-            status = gr.Textbox(
-                label="Status", 
-                value="Ready to create service", 
-                interactive=False
+            consolidated_status = gr.Markdown(
+                value="### Status: Ready to create service\n\nEnter a GitHub URL and click 'Create RAG Service'",
+                elem_id="consolidated_status"
             )
             
-        with gr.Row():
-            message = gr.Textbox(
-                label="Message",
-                value="Enter a GitHub URL and click 'Create RAG Service'",
-                interactive=False,
-                lines=2
-            )
+        # Hidden components to store original values
+        status_hidden = gr.Textbox(visible=False, value="Ready to create service")
+        message_hidden = gr.Textbox(visible=False, value="Enter a GitHub URL and click 'Create RAG Service'")
+        service_url_hidden = gr.Textbox(visible=False, value="")
+        model_def_path_hidden = gr.Textbox(visible=False, value="")
             
         with gr.Row():
-            service_url = gr.Textbox(
-                label="Service URL",
-                value="",
-                interactive=False,
-            )
-            open_button = gr.Button("Open Service")
+            open_button = gr.Button("Open Service", interactive=False)
             
-        with gr.Row():
-            model_def_path = gr.Textbox(
-                label="Model Definition Path",
-                value="",
-                interactive=False,
-            )
+        # Function to update the consolidated status box
+        def update_consolidated_status(status, message, service_url, model_def_path):
+            status_icon = "✅" if status == "Success" else "❌" if status == "Error" else "⏳"
+            
+            consolidated_text = f"### Status: {status} {status_icon}\n\n"
+            consolidated_text += f"{message}\n\n"
+            
+            if service_url:
+                consolidated_text += f"**Service URL**: {service_url}\n\n"
+                
+            if model_def_path:
+                consolidated_text += f"**Model Definition**: {model_def_path}"
+                
+            return consolidated_text, status, message, service_url, model_def_path
+        
+        # Function to update button interactivity
+        def update_button_state(service_url):
+            return bool(service_url)
             
         # Button click event
         create_button.click(
             create_rag_service,
             inputs=[github_url, chunking_preset, chunk_size_slider, chunk_overlap_slider, 
                     enable_chunking, max_results, base_url, base_model_name, service_type],
-            outputs=[status, message, service_url, model_def_path],
+            outputs=[status_hidden, message_hidden, service_url_hidden, model_def_path_hidden],
+        ).then(
+            update_consolidated_status,
+            inputs=[status_hidden, message_hidden, service_url_hidden, model_def_path_hidden],
+            outputs=[consolidated_status, status_hidden, message_hidden, service_url_hidden, model_def_path_hidden],
+        ).then(
+            update_button_state,
+            inputs=[service_url_hidden],
+            outputs=[open_button],
         )
         
         # Open service button
@@ -1086,8 +1107,16 @@ def create_interface() -> gr.Blocks:
             
         open_button.click(
             open_service,
-            inputs=[service_url],
-            outputs=[message],
+            inputs=[service_url_hidden],
+            outputs=[message_hidden],
+        ).then(
+            update_consolidated_status,
+            inputs=[status_hidden, message_hidden, service_url_hidden, model_def_path_hidden],
+            outputs=[consolidated_status, status_hidden, message_hidden, service_url_hidden, model_def_path_hidden],
+        ).then(
+            update_button_state,
+            inputs=[service_url_hidden],
+            outputs=[open_button],
         )
         
         # Example buttons
@@ -1097,18 +1126,18 @@ def create_interface() -> gr.Blocks:
         with gr.Row():
             example_1 = gr.Button("LangChain")
             example_2 = gr.Button("TensorRT-LLM")
-            example_3 = gr.Button("Annotated Deep Learning")
+            example_3 = gr.Button("vLLM")
             
         example_1.click(
-            lambda: "https://github.com/langchain-ai/langchain",
+            lambda: "https://github.com/langchain-ai/langchain/tree/master/docs",
             outputs=[github_url],
         )
         example_2.click(
-            lambda: "https://github.com/NVIDIA/TensorRT-LLM",
+            lambda: "https://github.com/NVIDIA/TensorRT-LLM/tree/main/docs",
             outputs=[github_url],
         )
         example_3.click(
-            lambda: "https://github.com/labmlai/annotated_deep_learning_paper_implementations",
+            lambda: "https://github.com/vllm-project/vllm/tree/main/docs",
             outputs=[github_url],
         )
         
