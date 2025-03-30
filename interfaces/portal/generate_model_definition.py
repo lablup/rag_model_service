@@ -243,52 +243,57 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     
     # Determine the start command based on service type
     if service_type in ['gradio', 'Gradio UI']:
-        start_command = [
+        # Build the start command with proper string formatting for Backend.AI
+        start_command_args = [
             'python3',
             f'{backend_model_path}/RAGModelService/interfaces/cli_app/launch_gradio.py',
             '--indices-path',
-            indices_path,
+            f'"{indices_path}"',
             '--docs-path',
-            docs_path,
+            f'"{docs_path}"',
             '--max-results',
-            str(max_results),
+            f'"{str(max_results)}"',
             '--base_model_name',
-            base_model_name,
-            '--base_url',
-            base_url,
+            f'"{base_model_name}"',
             '--service-id',
-            service_id,
+            f'"{service_id}"',
             '--host',
-            '0.0.0.0',
+            '"0.0.0.0"',
             '--port',
-            str(port)
+            f'"{str(port)}"'
         ]
+        
+        # Only add base_url if it's not empty
+        if base_url and base_url.strip():
+            start_command_args.extend(['--base_url', f'"{base_url}"'])
+            
     elif service_type in ['fastapi', 'FastAPI Server']:  # fastapi
-        start_command = [
+        # Build the start command with proper string formatting for Backend.AI
+        start_command_args = [
             'python3',
             f'{backend_model_path}/RAGModelService/interfaces/fastapi_app/fastapi_server.py',
             '--indices-path',
-            indices_path,
+            f'"{indices_path}"',
             '--docs-path',
-            docs_path,
+            f'"{docs_path}"',
             '--max-results',
-            str(max_results),
+            f'"{str(max_results)}"',
             '--service-id',
-            service_id,
+            f'"{service_id}"',
             '--host',
-            '0.0.0.0',
+            '"0.0.0.0"',
             '--port',
-            str(port)
+            f'"{str(port)}"'
         ]
     
-    # Create the model definition
+    # Create the model definition following Backend.AI's expected format
     model_definition = {
         'models': [
             {
                 'name': model_name,
                 'model_path': '/models',
                 'service': {
-                    'port': port,
+                    'port': int(port),  # Ensure port is an integer
                     'pre_start_actions': [
                         {
                             'action': 'run_command',
@@ -297,7 +302,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
                             }
                         }
                     ],
-                    'start_command': start_command
+                    'start_command': start_command_args  # Use the list format as Backend.AI expects
                 }
             }
         ]
