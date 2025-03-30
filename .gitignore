@@ -22,4 +22,4 @@ bai_manager/*
 github_docs/*
 embedding_indices/*
 rag_services/*
-
+tmp/*
