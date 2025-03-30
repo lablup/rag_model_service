@@ -1,161 +1,197 @@
-# RAG Model Service
+# DosiRAG
 
+A powerful Retrieval-Augmented Generation (RAG) service for creating intelligent documentation assistants from GitHub repositories.
 A Retrieval-Augmented Generation (RAG) service for document search and generation, providing a simple and efficient way to build a question-answering system powered by your own documentation.
 
-## Features
+Powered by Backend.AI, Backend.AI Model Service and Backend.AI CLI Client.
 
-- Vector-based document search using OpenAI embeddings and FAISS
-- LLM-powered document question-answering with context retrieval
-- Simple CLI interface for document indexing and testing
-- Interactive web UI built with Gradio
-- No project-specific code - works with any documentation structure
+## Overview
 
-## Prerequisites
+DosiRAG enables you to transform documentation repositories into interactive AI assistants that provide accurate, context-aware responses. Simply point DosiRAG at a GitHub repository containing documentation, and it will create a specialized assistant with deep knowledge of your content.
 
-- Python 3.10+
-- OpenAI API key
+## Key Components
 
-## Installation
+### Portal Application (`interfaces/portal/app.py`)
 
-### Option 1: Install from source
+The Portal is the main entry point for creating new RAG services. This web-based interface allows you to:
+
+- Enter any GitHub URL containing documentation
+- Configure document processing settings
+- Deploy a new RAG service with a single click
+
+**Process Flow:**
+1. You enter a GitHub repository URL and configure settings
+2. DosiRAG clones the repository and processes the documentation
+3. Vector embeddings are created for semantic search capabilities
+4. A Backend.AI service is automatically deployed
+5. You receive a URL to access your new documentation assistant
+
+**Configuration Options:**
+- **Chunking Strategy:** Choose between Fine-grained (precise answers), Balanced (default), or Contextual (more background)
+- **Number of Results:** Control how many document chunks are retrieved for each query
+- **Model Settings:** Configure the base model and API endpoint
+- **Service Type:** Select between Gradio UI (interactive interface) or FastAPI Server (API endpoints)
+
+### RAG Service Interface (`interfaces/cli_app/launch_gradio.py`)
+
+Once deployed, your RAG service provides an intuitive interface where users can:
+
+- Ask natural language questions about the documentation
+- View AI-generated responses that cite relevant sources
+- Explore the retrieved documentation directly
+- Use suggested questions to get started quickly
+
+The interface combines the power of large language models with the accuracy of retrieval-based approaches, ensuring responses are both helpful and factually grounded in your documentation.
+
+## Command Line Tools
+
+DosiRAG includes several powerful CLI tools for advanced usage scenarios:
+
+### `create_rag_service.py`
+
+Create RAG services directly from the command line:
 
 ```bash
-# Clone the repository
-git clone https://github.com/lablup/RAGModelService.git
-cd RAGModelService
-
-# Install the package in development mode
-pip install -e .
+python interfaces/cli_app/create_rag_service.py --github-url https://github.com/owner/repo --service-id my_service
 ```
 
-### Option 2: Install dependencies directly
+This script offers the same functionality as the Portal but in a CLI format, perfect for automation and scripting.
+
+### `github_cli.py`
+
+Manage GitHub repository operations:
 
 ```bash
-pip install -r requirements.txt
-python-dotenv
-gradio
+# Parse a GitHub URL to extract components
+python interfaces/cli_app/github_cli.py parse https://github.com/owner/repo
+
+# Clone a specific directory from a repository
+python interfaces/cli_app/github_cli.py clone https://github.com/owner/repo/tree/main/docs
 ```
 
-## Configuration
+### `launch_gradio.py`
 
-1. Create a `.env` file in the root directory based on `.env_example`:
+Launch the Gradio interface for an existing RAG service:
 
+```bash
+python interfaces/cli_app/launch_gradio.py --indices-path ./indices --docs-path ./docs --service-id my_service
 ```
+
+This script initializes the vector store, retrieval engine, and web interface for interacting with documentation.
+
+### `rag_cli.py`
+
+An interactive command-line interface for querying your documentation:
+
+```bash
+python interfaces/cli_app/rag_cli.py --service-id my_service
+```
+
+### `vectorstore_cli.py`
+
+Manage vector indices for your documentation:
+
+```bash
+# Process documents and create indices
+python interfaces/cli_app/vectorstore_cli.py process --docs-path ./docs
+
+# Search in vector indices
+python interfaces/cli_app/vectorstore_cli.py search "How do I install the library?" --indices-path ./indices
+```
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.12+
+- OpenAI API key (set as environment variable `OPENAI_API_KEY`)
+- [Backend.AI](https://www.backend.ai/) credentials (for service deployment)
+
+### Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/lablup/dosirag.git
+   cd dosirag
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -e .
+   ```
+
+3. Create a `.env` file with your API keys and configuration.
+```bash
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o  # or another OpenAI model
 TEMPERATURE=0.2
 MAX_RESULTS=5
 ```
 
-## Usage
+### Creating Your First RAG Service
 
-### 1. Document Indexing
+1. Start the Portal application:
+   ```bash
+   python interfaces/portal/app.py
+   ```
 
-Index your documents to create a vector store:
+2. Open the provided URL in your browser.
 
-```bash
-# Using the CLI tool with the installed package
-python vectordb_manager/vectordb_manager.py --docs-path ./TensorRT-LLM --indices-path ./embedding_indices --create-index
+3. Enter a GitHub URL containing documentation.
 
-# to Test the search
-python vectordb_manager/vectordb_manager.py --search "What is AWQ?" --top-k 5
-```
+4. Configure settings (or use defaults) and click "Create RAG Service".
 
-### 2. Terminal Chat Interface
+5. Once the service is deployed, click "Open Service" to access your documentation assistant.
 
-Test the RAG system with a simple command-line interface:
+## Architecture
 
-```bash
-# run the module directly
-python -m app.rag_chatbot
-```
+DosiRAG follows a modular architecture with these core components:
 
-### 3. Web Interface
+1. **Document Processor:** Handles reading, parsing, and chunking documentation files
+2. **Vector Store:** Creates and manages vector embeddings for similarity search
+3. **Retrieval Engine:** Fetches relevant documents based on user queries
+4. **LLM Interface:** Communicates with language models to generate responses
+5. **RAG Engine:** Coordinates between retrieval and language model components
+6. **User Interfaces:** Multiple interfaces for interacting with the system
 
-Launch the Gradio web interface:
+## Advanced Configuration
 
-```bash
-# run the module directly
-python app/gradio_app.py
-```
+DosiRAG can be configured through environment variables, command-line arguments, or a configuration file:
 
-### 4. Vector DB Testing
+- **LLM Settings:** Model name, temperature, API key, etc.
+- **Retrieval Settings:** Max results, filter threshold, etc.
+- **Server Settings:** Host, port, sharing options, etc.
+- **Path Settings:** Custom paths for documents, indices, etc.
+- **Chunking Settings:** Chunk size, overlap, and strategy
 
-Test the vector database functionality:
+## Backend.AI Integration
 
+DosiRAG integrates with Backend.AI for scalable service deployment:
 
-## Components
+1. Automatically generates model definition YAML files
+2. Creates Backend.AI services with appropriate resource allocation
+3. Manages service lifecycle through Backend.AI's API
 
-- **vectordb_manager**: Handles document collection, vectorization, and storage
-- **app/rag_chatbot.py**: Implements the RAG system core functionality
-- **app/gradio_app.py**: Provides a web interface using Gradio
-- **app/document_filter.py**: Simple document filtering utility
+## Customization
 
+DosiRAG can be customized in several ways:
 
-# Auto RAG Service Launch:
-## 1. setup_rag.py
-This script handles the first stage of creating a RAG service:
+- **Document Processing:** Adjust chunking strategy for your specific documentation
+- **LLM Integration:** Connect to different LLM providers
+- **UI Customization:** Modify the Gradio interface for your needs
+- **Retrieval Options:** Fine-tune document retrieval parameters
 
-Clones a GitHub repository containing documentation
-Processes the documentation to create vector embeddings
-Tests the RAG system with sample queries
-You can use it independently if you just want to prepare vector embeddings for a repository
+## Troubleshooting
 
-## 2. launch_gradio.py
-This script handles the second stage:
+- **Vector Index Issues:** Check that indices have been properly created
+- **Service Deployment Failures:** Verify Backend.AI credentials and permissions
+- **Document Retrieval Problems:** Try different chunking strategies
+- **LLM Response Issues:** Check your OpenAI API key and model access
 
-Takes existing vector store and documentation paths
-Configures and initializes the RAG system
-Launches a Gradio web interface for interacting with the documentation
-Use this if you already have processed documentation and want to start a web interface
+## Contributing
 
-## 3. create_rag_service.py
-This script combines the functionality of the first two scripts:
+Contributions are welcome! Please see our contributing guidelines for more information.
 
-Clones a GitHub repository
-Processes the documentation
-Launches a Gradio web interface
-One-command solution for creating a complete RAG service from a GitHub URL
-
-## 4. rag_service_portal.py
-This script provides a web-based portal:
-
-Offers a Gradio interface where users can enter GitHub URLs
-Processes repositories in the background
-Provides links to the resulting RAG services
-Manages multiple services simultaneously
-This is the "front door" to the system for non-technical users
-
-## 5. rag_launcher.py
-This is a utility script that:
-
-Sets up example repositories (optionally)
-Launches the RAG service portal
-Performs environment checks
-Provides a unified entry point to start the whole system
-
-## How They Work Together
-The system is designed to be modular, where each script can be used independently or as part of a workflow:
-
-Basic Workflow: setup_rag.py → launch_gradio.py
-
-First process the documentation, then launch the interface
-
-
-Simplified Workflow: create_rag_service.py
-
-All-in-one solution that combines the two steps
-
-
-Portal Workflow: rag_service_portal.py
-
-Web-based interface that manages multiple services
-Uses the other scripts behind the scenes
-
-
-Complete System: rag_launcher.py
-
-Sets up and launches the entire system
 ## License
 
-MIT
+This project is licensed under the MIT License.
