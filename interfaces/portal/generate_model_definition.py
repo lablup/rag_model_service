@@ -13,6 +13,7 @@ import argparse
 import os
 import re
 import sys
+import uuid
 import yaml
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -67,6 +68,14 @@ def parse_args():
         type=str,
         help="Type of service (gradio or fastapi)",
         choices=["gradio", "fastapi", "Gradio UI", "FastAPI Server"],
+        default=None,
+    )
+    
+    # Service ID
+    parser.add_argument(
+        "--service-id",
+        type=str,
+        help="Service ID",
         default=None,
     )
     
@@ -200,9 +209,14 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     
     # Get the current MAX_RESULTS from environment
     max_results = os.environ.get("MAX_RESULTS", "5")
-    base_model_name = os.environ.get("BASE_MODEL_NAME", config.llm.model_name)
-    base_url = os.environ.get("BASE_URL", config.llm.base_url)
-
+    backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
+    rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
+    base_model_name = os.environ.get("BASE_MODEL_NAME", "")  # Don't set a default here
+    base_url = os.environ.get("BASE_URL", "")
+    
+    # Use default max_results if not provided
+    max_results = 5
+    
     # Use provided values or defaults from config
     if port is None:
         # Use server config instead of service config
@@ -218,21 +232,12 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     # Determine the docs path argument
     docs_path_arg = path if path else ""
     
-    # Use the provided service_id or generate one from the GitHub URL
-    if service_id is None:
-        # For backward compatibility, but this should not be used
-        service_id = f"{owner}/{repo}"
+    # Ensure service_id is not empty
+    if not service_id or service_id.strip() == "":
+        # Generate a random service ID if not provided
+        service_id = str(uuid.uuid4())[:8]
     
-    # Update path configuration with service ID
-    path_config.service_id = service_id
-    
-    # Get BACKEND_MODEL_PATH from environment variable or use a default
-    backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
-    
-    # Get RAG_SERVICE_PATH from environment variable or use a default
-    rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
-    
-    # Ensure rag_service_path ends with a slash
+    # Ensure we have valid paths
     if not rag_service_path.endswith('/'):
         rag_service_path += '/'
     
@@ -253,8 +258,6 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             docs_path,
             '--max-results',
             str(max_results),  
-            '--base_model_name',
-            base_model_name,
             '--service-id',
             service_id,
             '--host',
@@ -262,6 +265,10 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             '--port',
             str(port)  
         ]
+        
+        # Only add base_model_name if it's not empty
+        if base_model_name and base_model_name.strip():
+            start_command_args.extend(['--base_model_name', base_model_name])
         
         # Only add base_url if it's not empty
         if base_url and base_url.strip():
@@ -285,6 +292,10 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
             '--port',
             str(port)  
         ]
+        
+        # Only add base_model_name if it's not empty
+        if base_model_name and base_model_name.strip():
+            start_command_args.extend(['--base_model_name', base_model_name])
         
         # Only add base_url if it's not empty
         if base_url and base_url.strip():
@@ -335,6 +346,16 @@ def main():
         # Parse arguments
         args = parse_args()
         
+        # Validate command-line parameters
+        if not args.github_url or args.github_url.strip() == "":
+            raise ValueError("GitHub URL is required")
+        
+        if not args.output_dir or args.output_dir.strip() == "":
+            raise ValueError("Output directory is required")
+        
+        if not args.name_prefix or args.name_prefix.strip() == "":
+            raise ValueError("Model name prefix is required")
+        
         # Parse GitHub URL
         owner, repo, branch, path = parse_github_url(args.github_url)
         
@@ -349,7 +370,8 @@ def main():
             args.github_url,
             model_name,
             args.port,
-            args.service_type
+            args.service_type,
+            args.service_id
         )
         
         # Create output directory if it doesn't exist
