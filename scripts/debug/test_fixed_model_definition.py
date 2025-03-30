@@ -213,6 +213,52 @@ def test_empty_parameters():
         else:
             os.environ.pop("BASE_URL", None)
 
+def test_custom_max_results():
+    """Test model definition generation with custom max_results value."""
+    print("\n=== Testing Custom max_results Value ===")
+    
+    github_url = "https://github.com/lablup/backend.ai"
+    model_name = "RAG Service for Backend.AI"
+    port = 8000
+    service_type = "gradio"
+    service_id = "test123"
+    custom_max_results = 15  # Custom value from Gradio UI
+    
+    print(f"\nTest Case 6: Custom max_results = {custom_max_results}")
+    print(f"  GitHub URL: {github_url}")
+    print(f"  Model Name: {model_name}")
+    print(f"  Port: {port}")
+    print(f"  Service Type: {service_type}")
+    print(f"  Service ID: {service_id}")
+    print(f"  Custom max_results: {custom_max_results}")
+    
+    model_def = generate_model_definition(
+        github_url, 
+        model_name, 
+        port, 
+        service_type, 
+        service_id,
+        max_results=custom_max_results
+    )
+    
+    print(f"  Model Definition Generated Successfully")
+    
+    # Print the start command for inspection
+    start_command = model_def['models'][0]['service']['start_command']
+    print_command_args(start_command)
+    
+    # Check if max_results has the custom value
+    max_results_index = start_command.index('--max-results') + 1
+    actual_max_results = start_command[max_results_index]
+    
+    print(f"  Expected max_results: {custom_max_results}")
+    print(f"  Actual max_results: {actual_max_results}")
+    
+    if str(custom_max_results) == actual_max_results:
+        print("  Test passed: Custom max_results value is correctly used")
+    else:
+        print("  Test failed: Custom max_results value is not used")
+
 def main():
     """Main function."""
     # Save current environment variables
@@ -229,6 +275,7 @@ def main():
         test_fastapi_model_definition()
         test_yaml_format()
         test_empty_parameters()
+        test_custom_max_results()
         
         print("\nAll tests completed successfully!")
         return 0

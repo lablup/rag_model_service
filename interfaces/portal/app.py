@@ -91,7 +91,7 @@ def create_service_directory(service_id: str) -> Path:
     return service_dir
 
 
-def generate_model_definition(github_url: str, service_dir: Path, service_type: str = "Gradio UI") -> Optional[Path]:
+def generate_model_definition(github_url: str, service_dir: Path, service_type: str = "Gradio UI", max_results: int = 5) -> Optional[Path]:
     """
     Generate a model definition YAML file for the RAG service.
     
@@ -99,6 +99,7 @@ def generate_model_definition(github_url: str, service_dir: Path, service_type: 
         github_url: GitHub URL for documentation
         service_dir: Path to the service directory
         service_type: Type of RAG service to create (Gradio UI or FastAPI Server)
+        max_results: Number of chunks to retrieve for each query
         
     Returns:
         Path to the generated model definition file, or None if generation failed
@@ -148,7 +149,8 @@ def generate_model_definition(github_url: str, service_dir: Path, service_type: 
             model_name=f"RAG Service for {github_info.repo.replace('-', ' ').replace('_', ' ').title()}",
             port=port,
             service_type=service_type_value,
-            service_id=service_id  # Pass the service_id to use for paths
+            service_id=service_id,  # Pass the service_id to use for paths
+            max_results=max_results
         )
         
         # Write the model definition to file
@@ -334,7 +336,7 @@ async def process_github_url(
         # Generate model definition
         model_def_path = None
         try:
-            model_def_path = generate_model_definition(github_url, service_dir, service_type)
+            model_def_path = generate_model_definition(github_url, service_dir, service_type, max_results)
             if model_def_path:
                 logger.info("Generated model definition", path=str(model_def_path))
             else:

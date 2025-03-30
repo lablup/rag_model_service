@@ -140,13 +140,13 @@ def parse_args():
     parser.add_argument(
         '--base_url',
         type=str,
-        default='http://localhost:8000',
+        default=None,
         help='Base URL for the API endpoint'
     )
     parser.add_argument(
         '--base_model_name', 
         type=str,
-        default='gpt-4o',
+        default=None,
         help='Base model name to use for the LLM'
     )
     
@@ -200,9 +200,15 @@ def configure_rag_system(args) -> Dict:
     # Update LLM configuration with base model name
     if args.base_model_name:
         config.llm.model_name = args.base_model_name
+    else:
+        # Try to get from both environment variables
+        config.llm.model_name = os.environ.get("BASE_MODEL_NAME") or os.environ.get("OPENAI_MODEL", config.llm.model_name)
     
     if args.base_url:
         config.llm.base_url = args.base_url
+    else:
+        # Try to get from both environment variables
+        config.llm.base_url = os.environ.get("BASE_URL") or os.environ.get("OPENAI_BASE_URL", config.llm.base_url)
     
     # Resolve paths using config if not explicitly provided
     if args.docs_path:
@@ -249,7 +255,7 @@ def configure_rag_system(args) -> Dict:
             "model": args.openai_model or config.llm.model_name,
             "temperature": args.temperature if args.temperature is not None else config.llm.temperature,
             "openai_api_key": os.environ.get("OPENAI_API_KEY", config.llm.openai_api_key),
-            "openai_base_url": os.environ.get("OPENAI_BASE_URL", config.llm.base_url),
+            "openai_base_url": os.environ.get("BASE_URL", os.environ.get("OPENAI_BASE_URL", config.llm.base_url)),
         },
         "retrieval": {
             "max_results": args.max_results or config.rag.max_results,

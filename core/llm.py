@@ -23,16 +23,21 @@ class LLMInterface:
         self.settings = settings
         
         # Initialize ChatOpenAI
-        self.llm = ChatOpenAI(
-            openai_api_key=settings.openai_api_key,
-            base_url=settings.base_url,
-            model_name=settings.model_name,
-            temperature=settings.temperature,
-            streaming=settings.streaming,
-            max_tokens=settings.max_tokens,
-            timeout=120,  # Increased timeout for reliability
-            max_retries=3,
-        )
+        llm_kwargs = {
+            "openai_api_key": settings.openai_api_key,
+            "model_name": settings.model_name,
+            "temperature": settings.temperature,
+            "streaming": settings.streaming,
+            "max_tokens": settings.max_tokens,
+            "timeout": 120,  # Increased timeout for reliability
+            "max_retries": 3,
+        }
+        
+        # Only add base_url if it's not empty
+        if settings.base_url and settings.base_url.strip():
+            llm_kwargs["base_url"] = settings.base_url
+            
+        self.llm = ChatOpenAI(**llm_kwargs)
         
         # Initialize memory for chat history
         self.messages = []

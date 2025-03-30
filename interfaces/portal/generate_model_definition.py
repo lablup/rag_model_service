@@ -189,7 +189,7 @@ def generate_docs_name(owner: str, repo: str, path: Optional[str]) -> str:
         return repo_name
 
 
-def generate_model_definition(github_url: str, model_name: str, port: int = None, service_type: str = None, service_id: str = None) -> Dict:
+def generate_model_definition(github_url: str, model_name: str, port: int = None, service_type: str = None, service_id: str = None, max_results: int = None) -> Dict:
     """
     Generate a model definition for the RAG service.
     
@@ -199,6 +199,7 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
         port: Port number (if None, will use the value from config)
         service_type: Service type (gradio or fastapi) (if None, will use the value from config)
         service_id: Service ID (if None, will be generated from GitHub URL)
+        max_results: Maximum results (if None, will use the value from environment)
         
     Returns:
         Model definition as a dictionary
@@ -207,15 +208,16 @@ def generate_model_definition(github_url: str, model_name: str, port: int = None
     config = load_config()
     path_config = config.paths
     
-    # Get the current MAX_RESULTS from environment
-    max_results = os.environ.get("MAX_RESULTS", "5")
+    # Get environment variables
+    max_results_env = os.environ.get("MAX_RESULTS", "5")
     backend_model_path = os.environ.get("BACKEND_MODEL_PATH", "/models")
     rag_service_path = os.environ.get("RAG_SERVICE_PATH", f"{backend_model_path}/RAGModelService/rag_services/")
     base_model_name = os.environ.get("BASE_MODEL_NAME", "")  # Don't set a default here
     base_url = os.environ.get("BASE_URL", "")
     
-    # Use default max_results if not provided
-    max_results = 5
+    # Use provided max_results or default from environment
+    if max_results is None:
+        max_results = int(max_results_env)
     
     # Use provided values or defaults from config
     if port is None:
