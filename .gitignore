@@ -18,6 +18,8 @@ ENV/
 bai_manager/*
 .env
 .python-version
-.env
+*.env
+github_docs/*
+embedding_indices/*
 rag_services/*
-
+tmp/*

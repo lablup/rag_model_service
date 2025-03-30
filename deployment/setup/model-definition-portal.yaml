@@ -1,0 +1,12 @@
+models:
+  - name: "TensroRT-LLM RAG Portal"
+    model_path: "/models"
+    service:
+      pre_start_actions:
+        - action: run_command
+          args:
+            command: ["/bin/bash", "/models/RAGModelService/deployment/scripts/setup_portal.sh"]
+      start_command:
+        - /bin/bash
+        - /models/RAGModelService/deployment/scripts/start_portal.sh
+      port: 8000

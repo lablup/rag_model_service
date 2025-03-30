@@ -1,0 +1,22 @@
+models:
+- model_path: /models
+  name: RAG Service for repo
+  service:
+    port: 8000
+    pre_start_actions:
+    - action: run_command
+      args:
+        command:
+        - /bin/bash
+        - /models/RAGModelService/deployment/scripts/setup.sh
+    start_command:
+    - python3
+    - /models/RAGModelService/interfaces/gradio_app/gradio_app.py
+    - --indices-path
+    - /models/RAGModelService/rag_services/owner/repo/indices
+    - --docs-path
+    - /models/RAGModelService/rag_services/owner/repo/docs
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8000'

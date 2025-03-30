@@ -5,30 +5,25 @@ with open('requirements.txt') as f:
     requirements = [line.strip() for line in f.readlines() if line.strip()]
 
 setup(
-    name="rag_model_service",
+    name="dosirag",
     version="0.1.0",
-    description="A RAG (Retrieval-Augmented Generation) service for document search and generation",
-    author="Lablup",
+    description="DosiRAG is a service that creates specialized documentation assistants from GitHub repositories using Backend.AI, Model Service and Backend.AI CLI Client",
+    author="Sergey Leksikov @Lablup",
+    author_email="lexikovs@lablup.com",
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">=3.9",
+    python_requires=">=3.12",
     install_requires=requirements + [
         "python-dotenv",
     ],
     entry_points={
-        "console_scripts": [
-            "rag-vectorize=vectordb_manager.cli_vectorizer:app",
-            "rag-chat=app.rag_chatbot:main",
-            "rag-web=app.gradio_app:main",
-        ],
+        "console_scripts": [],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
 )

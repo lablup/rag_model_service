@@ -1,0 +1,29 @@
+curl https://rag_service.asia03.app.backend.ai/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dummy_key" \
+  -d '{
+    "model": "rag-gpt4",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What container paths included in images after the container commit?"
+      }
+    ],
+    "temperature": 0.7
+  }'
+
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key-here" \
+  -N \
+  -d '{
+    "model": "rag-service",
+    "messages": [
+      {
+        "role": "user",
+        "content": "How to setup it?"
+      }
+    ],
+    "stream": false,
+    "temperature": 0.7
+  }'
