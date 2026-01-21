@@ -13,7 +13,7 @@ import logging
 
 import aiofiles
 import gradio as gr
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from config.config import load_config
@@ -43,8 +43,7 @@ class ChatState(BaseModel):
     current_docs: Dict[str, str] = Field(default_factory=dict)
     selected_doc: Optional[str] = Field(None)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 async def read_markdown_file(file_path: str | Path) -> str:
@@ -250,10 +249,6 @@ def create_gradio_interface(
     # Create Gradio interface
     with gr.Blocks(
         title=f"{DOC_NAME} Documentation Assistant",
-        theme=gr.themes.Base(),
-        css="""
-
-        """,
     ) as interface:
         # Initialize chat state with default ChatState instance
         initial_state = ChatState()
@@ -274,7 +269,6 @@ def create_gradio_interface(
                     label="Chat History",
                     height=400,
                     container=True,
-                    type="messages",
                     elem_classes="chat-history",
                 )
 
@@ -438,6 +432,7 @@ async def main():
             server_port=config.server.port,
             share=config.server.share_enabled,
             debug=True,
+            theme=gr.themes.Base(),
         )
 
     except Exception as e:
