@@ -9,7 +9,7 @@ logger = structlog.get_logger()
 class DocumentFilter:
     """Filter for relevance-based document filtering"""
 
-    def __init__(self, model_name: str = "gpt-4o", temperature: float = 0.0):
+    def __init__(self, model_name: str = "gpt-4.1-mini", temperature: float = 0.0):
         """Initialize DocumentFilter"""
         self.logger = logger.bind(component="DocumentFilter")
         self.model = ChatOpenAI(

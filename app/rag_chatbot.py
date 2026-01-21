@@ -28,14 +28,14 @@ class LLMConfig(BaseModel):
     """Configuration for LLM"""
 
     openai_api_key: str
-    model_name: str = "gpt-4o"
+    model_name: str = "gpt-4.1-mini"
     max_tokens: int = 2048
     temperature: float = 0.2
     streaming: bool = True
     memory_k: int = 25
     max_results: int = 5  # Reduced from 20 to limit context size
     max_tokens_per_doc: int = 8000  # New: limit tokens per document
-    filter_model: str = "gpt-4o"  # Model for document filtering
+    filter_model: str = "gpt-4.1-mini"  # Model for document filtering
     base_url: str = ""  # Base URL for custom model endpoints
 
 
@@ -310,8 +310,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--model", 
         type=str,
-        default="gpt-4o",
-        help="LLM model to use (default: gpt-4o)"
+        default="gpt-4.1-mini",
+        help="LLM model to use (default: gpt-4.1-mini)"
     )
     parser.add_argument(
         "--temperature",

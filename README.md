@@ -42,7 +42,7 @@ gradio
 
 ```
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4o  # or another OpenAI model
+OPENAI_MODEL=gpt-4.1-mini  # or another OpenAI model
 TEMPERATURE=0.2
 MAX_RESULTS=5
 ```

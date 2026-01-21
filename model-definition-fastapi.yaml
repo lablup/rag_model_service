@@ -10,3 +10,9 @@ models:
         - /bin/bash
         - /models/RAGModelService/run_fastapi_server.sh
       port: 8000
+      health_check:
+        path: /
+        max_retries: 500
+        max_wait_time: 60.0
+        expected_status_code: 200
+        initial_delay: 300.0 # 5 minutes

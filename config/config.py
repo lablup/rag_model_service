@@ -21,7 +21,7 @@ DOCS_PATH = Path("/models/RAGModelService/TensorRT-LLM/docs/source")
 class OpenAIConfig(BaseModel):
     """OpenAI API configuration."""
     api_key: str = Field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
-    model_name: str = Field(default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4o"))
+    model_name: str = Field(default_factory=lambda: os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"))
     temperature: float = Field(default_factory=lambda: float(os.environ.get("TEMPERATURE", "0.2")))
 
 

@@ -167,7 +167,7 @@ async def startup_event():
     # Initialize RAG manager
     config = LLMConfig(
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        model_name="gpt-4o",  # Match the model from RAGManager
+        model_name="gpt-4.1-mini",  # Match the model from RAGManager
         temperature=0.2,  # Match the temperature from RAGManager
         streaming=True,
     )
